@@ -41,6 +41,8 @@ ROW_ALT = "#f5fbf9"     # 표 줄무늬(홀수행, 민트 기운)
 SUBTOTAL_BG = "#d7f5ed"  # 소계 행 강조(민트)
 SELECT_BG = "#a7e8da"   # 표 선택행(민트)
 
+MONEY_COLS = {"입고단가", "총단가"}   # 우측정렬할 금액 컬럼
+
 
 def app_data_dir() -> str:
     base = os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -128,7 +130,9 @@ def fill_tree(tree: ttk.Treeview, rows: list[dict],
         for r in rows:
             w = max(w, fnt.measure(str(r.get(h, ""))))
         w = min(max(w + 26, 60), 420)   # 여백 + 최소/최대 제한
-        tree.column(h, width=w, anchor="center", stretch=False)
+        # 금액 컬럼은 우측정렬, 그 외는 가운데
+        anchor = "e" if h in MONEY_COLS else "center"
+        tree.column(h, width=w, anchor=anchor, stretch=False)
 
     tree.tag_configure("subtotal", background=SUBTOTAL_BG, font=(FONT, 10, "bold"))
     tree.tag_configure("odd", background=ROW_ALT)
@@ -430,6 +434,9 @@ class App(tk.Tk):
                                       command=lambda: export_rows_csv(self._inventory_display, "inventory.csv"),
                                       state="disabled")
         self.btn_inv_csv.pack(side="left", padx=8)
+        self.btn_sub_csv = ttk.Button(btns, text="소계/평균만 내보내기",
+                                      command=self._export_subtotals, state="disabled")
+        self.btn_sub_csv.pack(side="left")
         self.status = tk.StringVar(value="대기 중")
         ttk.Label(btns, textvariable=self.status, style="Status.TLabel").pack(side="right")
 
@@ -721,6 +728,7 @@ class App(tk.Tk):
                 )
 
         self.btn_inv_csv.configure(state="normal")
+        self.btn_sub_csv.configure(state="normal")
         self._render_inventory(initial=True)
 
     def _render_inventory(self, initial: bool = False) -> None:
@@ -777,6 +785,21 @@ class App(tk.Tk):
             self._sort_col = col
             self._sort_desc = False
         self._render_inventory()
+
+    def _export_subtotals(self) -> None:
+        """현재 표의 소계/평균 행만 (브랜드·모델명 포함) CSV 로 내보낸다."""
+        subs = [d for d in self._inventory_display if d.get("_subtotal")]
+        if not subs:
+            messagebox.showwarning("데이터 없음", "내보낼 소계가 없습니다. 먼저 재고현황을 조회하세요.")
+            return
+        rows = [{
+            "브랜드": d.get("브랜드", ""),
+            "모델명": d.get("모델명", ""),
+            "재고수량": d.get("재고수량", ""),
+            "평균단가": d.get("입고단가", ""),
+            "총단가": d.get("총단가", ""),
+        } for d in subs]
+        export_rows_csv(rows, "subtotals.csv")
 
     def _prices_updated(self, rows: list[dict], new_all: list[dict], n_fetched: int) -> None:
         """백그라운드 입고단가 매칭 완료 → 전체 데이터 교체 후 현재 필터/정렬로 재표시."""
