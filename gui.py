@@ -127,6 +127,7 @@ class App(tk.Tk):
         self.var_show_key = tk.BooleanVar(value=False)
         self.var_github = tk.StringVar()
         self.var_model = tk.StringVar()      # 조회조건: 모델명 필터(클라이언트측)
+        self.var_brand = tk.StringVar()      # 조회조건: 브랜드 필터(클라이언트측)
         self.ent_key: ttk.Entry | None = None
 
         self._apply_theme()
@@ -328,15 +329,17 @@ class App(tk.Tk):
         self.var_wh = tk.StringVar()
         ttk.Label(cond, text="기준일자(YYYYMMDD)").grid(row=0, column=0, sticky="e", **pad)
         ttk.Entry(cond, textvariable=self.var_base_date, width=16).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Label(cond, text="모델명").grid(row=0, column=2, sticky="e", **pad)
-        ttk.Entry(cond, textvariable=self.var_model, width=18).grid(row=0, column=3, sticky="w", **pad)
+        ttk.Label(cond, text="브랜드").grid(row=0, column=2, sticky="e", **pad)
+        ttk.Entry(cond, textvariable=self.var_brand, width=18).grid(row=0, column=3, sticky="w", **pad)
+        ttk.Label(cond, text="모델명").grid(row=0, column=4, sticky="e", **pad)
+        ttk.Entry(cond, textvariable=self.var_model, width=18).grid(row=0, column=5, sticky="w", **pad)
         ttk.Label(cond, text="품목코드").grid(row=1, column=0, sticky="e", **pad)
         ttk.Entry(cond, textvariable=self.var_prod, width=16).grid(row=1, column=1, sticky="w", **pad)
         ttk.Label(cond, text="창고코드").grid(row=1, column=2, sticky="e", **pad)
         ttk.Entry(cond, textvariable=self.var_wh, width=18).grid(row=1, column=3, sticky="w", **pad)
         ttk.Label(cond, style="Muted.TLabel",
-                  text="※ 모델명은 조회 결과를 부분일치로 필터링합니다.").grid(
-                      row=2, column=0, columnspan=4, sticky="w", padx=8, pady=(2, 0))
+                  text="※ 브랜드·모델명은 조회 결과를 부분일치로 필터링합니다. 결과는 브랜드 순으로 정렬됩니다.").grid(
+                      row=2, column=0, columnspan=6, sticky="w", padx=8, pady=(2, 0))
 
         btns = ttk.Frame(root)
         btns.pack(fill="x", padx=16, pady=(2, 6))
@@ -508,6 +511,7 @@ class App(tk.Tk):
             messagebox.showwarning("입력 필요", "회사코드 / 사용자ID / API 인증키를 모두 입력하세요.")
             return
         self._model_filter = self.var_model.get().strip()   # 모델명 필터(메인 스레드에서 캡처)
+        self._brand_filter = self.var_brand.get().strip()    # 브랜드 필터
         self.btn_query.configure(state="disabled")
         self.btn_inv_csv.configure(state="disabled")
         self.status.set("조회 중...")
@@ -568,10 +572,16 @@ class App(tk.Tk):
                 note = f"입고단가 미연동(품목 조회 불가): {exc}"
 
         display = cmp.build_inventory_display(rows, product_rows)
-        # 모델명 부분일치 필터(클라이언트측)
+        # 브랜드·모델명 부분일치 필터(클라이언트측)
+        bf = getattr(self, "_brand_filter", "").strip().lower()
         mf = getattr(self, "_model_filter", "").strip().lower()
+        if bf:
+            display = [d for d in display if bf in str(d.get("브랜드", "")).lower()]
         if mf:
             display = [d for d in display if mf in str(d.get("모델명", "")).lower()]
+        # 브랜드 순 정렬(품목코드/창고코드 보조 — 소계 그룹 유지)
+        display.sort(key=lambda d: (str(d.get("브랜드", "")), str(d.get("품목코드", "")),
+                                    str(d.get("창고코드", ""))))
         display = cmp.add_subtotals(display)   # 동일 품목코드 그룹 하단에 중간합계(평균 단가)
         self.after(0, self._query_done, data, rows, display, note)
 
