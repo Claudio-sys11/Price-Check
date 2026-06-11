@@ -127,27 +127,29 @@ def build_inventory_display(
 
 
 def add_subtotals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """동일 품목코드 그룹마다 하단에 중간합계(평균 단가) 행을 삽입한다.
+    """같은 (브랜드, 모델명) 그룹마다 하단에 중간합계(평균 단가) 행을 삽입한다.
 
+    한 모델의 여러 사이즈·창고를 합산한다.
     중간합계 행: 재고수량 합계, 총단가 합계, 평균 단가(= 총단가합 / 수량합, 수량합이 0이면 단가 평균).
     내부 표식 키 '_subtotal'=True 로 표시(표시 컬럼에서는 제외).
+    행은 이미 브랜드→모델명 순으로 정렬돼 있다는 전제(같은 모델이 연속).
     """
     if not rows:
         return rows
     cols = [k for k in rows[0].keys() if not k.startswith("_")]
 
-    groups: dict[str, list[dict]] = {}
-    order: list[str] = []
+    groups: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
     for r in rows:
-        c = str(r.get("품목코드", ""))
-        if c not in groups:
-            groups[c] = []
-            order.append(c)
-        groups[c].append(r)
+        key = (str(r.get("브랜드", "")), str(r.get("모델명", "")))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(r)
 
     out: list[dict[str, Any]] = []
-    for c in order:
-        g = groups[c]
+    for key in order:
+        g = groups[key]
         out.extend(g)
         sum_qty = sum(_to_number(r.get("재고수량")) for r in g)
         sum_total = sum(_to_number(r.get("총단가")) for r in g)
@@ -159,7 +161,12 @@ def add_subtotals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             avg = 0
         sub = {k: "" for k in cols}
-        label_col = "창고명" if "창고명" in sub else "품목코드"
+        # 소계 라벨에 어떤 브랜드/모델 소계인지 함께 표시
+        if "브랜드" in sub:
+            sub["브랜드"] = key[0]
+        if "모델명" in sub:
+            sub["모델명"] = key[1]
+        label_col = "창고명" if "창고명" in sub else "사이즈"
         sub[label_col] = "▸ 소계/평균"
         sub["재고수량"] = int(sum_qty)
         sub["입고단가"] = f"{int(round(avg)):,}"    # 평균 단가(천단위 콤마)
