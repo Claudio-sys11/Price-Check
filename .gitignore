@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller 빌드 산출물
+build/
+dist/
+*.spec
+
+# 설치파일 산출물 (릴리스 에셋으로 업로드, 저장소엔 미포함)
+installer/*.exe
+
+# 실행 결과
+output/
+
+# 로그
+*.log
+
+# 로컬 설정/비밀 (인증키 등) — 절대 커밋 금지
+config.json
+
+# 업체 데이터(가격·상품) — 공개 저장소 노출 방지
+data/wizfasta_products.json

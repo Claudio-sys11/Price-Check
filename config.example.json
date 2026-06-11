@@ -1,0 +1,23 @@
+{
+  "_comment": "이 파일을 config.json 으로 복사한 뒤 실제 값을 채우세요. config.json 은 절대 외부에 공유하지 마세요.",
+
+  "COM_CODE": "회사코드를 입력하세요",
+  "USER_ID": "API 사용자ID를 입력하세요",
+  "API_CERT_KEY": "EcountERP에서 발급받은 API 인증키를 입력하세요",
+
+  "LAN_TYPE": "ko-KR",
+  "ENV": "production",
+
+  "_update_comment": "자동 업데이트: github_repo(권장) 또는 update_url 중 하나. 둘 다 비우면 검사 안 함.",
+  "github_repo": "Claudio-sys11/Price-Check",
+  "update_url": "",
+
+  "inventory": {
+    "endpoint": "/OAPI/V2/InventoryBalance/GetListInventoryBalanceStatus",
+    "payload": {
+      "BASE_DATE": "",
+      "PROD_CD": "",
+      "WH_CD": ""
+    }
+  }
+}

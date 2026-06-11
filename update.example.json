@@ -1,0 +1,6 @@
+{
+  "_comment": "자동 업데이트 매니페스트 예시. 이 파일과 새 EcountInventory_Setup.exe 를 웹/서버에 올리고, config.json 의 update_url 에 이 파일의 URL 을 지정하세요.",
+  "version": "1.0.3",
+  "url": "https://example.com/downloads/EcountInventory_Setup.exe",
+  "notes": "재고현황 품목명 분해 컬럼 추가"
+}
