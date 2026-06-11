@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -58,6 +59,24 @@ def _sort_key(value) -> tuple:
         return (0, float(s))
     except ValueError:
         return (1, str(value))
+
+
+# 의류 사이즈 순서(S < M < L ...). 숫자 사이즈는 작은 것부터.
+_SIZE_ORDER = {
+    "XXS": 0, "XS": 1, "S": 2, "M": 3, "L": 4, "XL": 5,
+    "XXL": 6, "2XL": 6, "XXXL": 7, "3XL": 7, "4XL": 8,
+    "U": 50, "F": 51, "FREE": 51, "ONE": 51, "ONESIZE": 51,
+}
+
+
+def _size_key(value) -> tuple:
+    """사이즈 정렬 키: 글자 사이즈는 S,M,L 순 / 숫자 사이즈는 작은→큰 / 기타는 텍스트."""
+    s = str(value).strip().upper()
+    if s in _SIZE_ORDER:
+        return (0, _SIZE_ORDER[s], 0.0, "")
+    if re.fullmatch(r"[0-9]+(\.[0-9]+)?", s):     # 순수 숫자 사이즈
+        return (1, 0, float(s), "")
+    return (2, 0, 0.0, s)                          # 그 외 텍스트
 
 
 def fill_tree(tree: ttk.Treeview, rows: list[dict],
@@ -676,10 +695,20 @@ class App(tk.Tk):
         ]
         if self._sort_col:   # 헤더 클릭 정렬(오름/내림)
             col = self._sort_col
-            filtered.sort(key=lambda d: _sort_key(d.get(col, "")), reverse=self._sort_desc)
-        else:                # 기본: 브랜드 순
-            filtered.sort(key=lambda d: (str(d.get("브랜드", "")), str(d.get("품목코드", "")),
-                                         str(d.get("창고코드", ""))))
+            if col == "사이즈":
+                keyf = lambda d: _size_key(d.get("사이즈", ""))
+            else:
+                keyf = lambda d: _sort_key(d.get(col, ""))
+            filtered.sort(key=keyf, reverse=self._sort_desc)
+        else:                # 기본 정렬: 브랜드 → 모델명 → 사이즈(S,M,L/숫자) → 입고일자
+            filtered.sort(key=lambda d: (
+                str(d.get("브랜드", "")),
+                str(d.get("모델명", "")),
+                _size_key(d.get("사이즈", "")),
+                str(d.get("입고일자", "")),
+                str(d.get("품목코드", "")),
+                str(d.get("창고코드", "")),
+            ))
         self._inventory_display = cmp.add_subtotals(filtered)
         fill_tree(self.tree_inv, self._inventory_display,
                   sort_callback=self._on_sort_column,
