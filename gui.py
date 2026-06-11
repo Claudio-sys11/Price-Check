@@ -91,7 +91,17 @@ class App(tk.Tk):
         self._inventory_raw: dict | None = None
         self._compare_rows: list[dict] = []
         self._update_url: str = ""
-        self._github_repo: str = ""
+
+        # 인증/설정 변수 (메인 화면엔 표시하지 않고 '설정' 메뉴 다이얼로그에서 입력)
+        self.var_com = tk.StringVar()
+        self.var_user = tk.StringVar()
+        self.var_key = tk.StringVar()
+        self.var_env = tk.StringVar(value="production")
+        self.var_show_key = tk.BooleanVar(value=False)
+        self.var_github = tk.StringVar()
+        self.ent_key: ttk.Entry | None = None
+
+        self._build_menu()
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True)
@@ -106,6 +116,58 @@ class App(tk.Tk):
 
         # 실행 시 백그라운드로 업데이트 확인
         self.after(800, self._start_update_check)
+
+    # ================= 상단 메뉴 / 설정 =================
+    def _build_menu(self) -> None:
+        menubar = tk.Menu(self)
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        settings_menu.add_command(label="인증 정보 설정...", command=self._open_settings)
+        settings_menu.add_separator()
+        settings_menu.add_command(label="종료", command=self.destroy)
+        menubar.add_cascade(label="설정", menu=settings_menu)
+        self.config(menu=menubar)
+
+    def _open_settings(self) -> None:
+        win = tk.Toplevel(self)
+        win.title("설정")
+        win.transient(self)
+        win.resizable(False, False)
+        pad = {"padx": 8, "pady": 5}
+
+        auth = ttk.LabelFrame(win, text="인증 정보")
+        auth.pack(fill="x", padx=12, pady=(12, 6))
+        ttk.Label(auth, text="회사코드").grid(row=0, column=0, sticky="e", **pad)
+        ttk.Entry(auth, textvariable=self.var_com, width=30).grid(row=0, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Label(auth, text="사용자ID").grid(row=1, column=0, sticky="e", **pad)
+        ttk.Entry(auth, textvariable=self.var_user, width=30).grid(row=1, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Label(auth, text="API 인증키").grid(row=2, column=0, sticky="e", **pad)
+        self.ent_key = ttk.Entry(auth, textvariable=self.var_key, width=30, show="*")
+        self.ent_key.grid(row=2, column=1, sticky="w", **pad)
+        ttk.Checkbutton(auth, text="표시", variable=self.var_show_key,
+                        command=self._toggle_key).grid(row=2, column=2, sticky="w", **pad)
+        ttk.Label(auth, text="환경").grid(row=3, column=0, sticky="e", **pad)
+        ttk.Combobox(auth, textvariable=self.var_env, width=28, state="readonly",
+                     values=["production", "test"]).grid(row=3, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Label(auth, text="(production=운영 / test=상자테스트)", foreground="#666").grid(
+            row=4, column=1, columnspan=2, sticky="w", padx=8)
+
+        upd = ttk.LabelFrame(win, text="자동 업데이트")
+        upd.pack(fill="x", padx=12, pady=6)
+        ttk.Label(upd, text="GitHub 저장소").grid(row=0, column=0, sticky="e", **pad)
+        ttk.Entry(upd, textvariable=self.var_github, width=30).grid(row=0, column=1, sticky="w", **pad)
+        ttk.Label(upd, text="(예: Claudio-sys11/Price-Check)", foreground="#666").grid(
+            row=1, column=1, sticky="w", padx=8)
+
+        btns = ttk.Frame(win)
+        btns.pack(fill="x", padx=12, pady=(6, 12))
+        ttk.Button(btns, text="저장", command=lambda: self._save_settings(win)).pack(side="right", padx=4)
+        ttk.Button(btns, text="닫기", command=win.destroy).pack(side="right", padx=4)
+
+        win.grab_set()
+
+    def _save_settings(self, win: tk.Toplevel) -> None:
+        self._save_config()
+        win.destroy()
 
     # ================= 자동 업데이트 =================
     def _start_update_check(self) -> None:
@@ -159,31 +221,11 @@ class App(tk.Tk):
         pad = {"padx": 6, "pady": 4}
         root = self.tab_inv
 
-        frm = ttk.LabelFrame(root, text="인증 정보")
-        frm.pack(fill="x", padx=10, pady=(10, 4))
-
-        self.var_com = tk.StringVar()
-        self.var_user = tk.StringVar()
-        self.var_key = tk.StringVar()
-        self.var_env = tk.StringVar(value="production")
-
-        ttk.Label(frm, text="회사코드").grid(row=0, column=0, sticky="e", **pad)
-        ttk.Entry(frm, textvariable=self.var_com, width=24).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Label(frm, text="사용자ID").grid(row=0, column=2, sticky="e", **pad)
-        ttk.Entry(frm, textvariable=self.var_user, width=24).grid(row=0, column=3, sticky="w", **pad)
-
-        ttk.Label(frm, text="API 인증키").grid(row=1, column=0, sticky="e", **pad)
-        self.ent_key = ttk.Entry(frm, textvariable=self.var_key, width=52, show="*")
-        self.ent_key.grid(row=1, column=1, columnspan=3, sticky="w", **pad)
-        self.var_show_key = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frm, text="표시", variable=self.var_show_key,
-                        command=self._toggle_key).grid(row=1, column=4, sticky="w", **pad)
-
-        ttk.Label(frm, text="환경").grid(row=2, column=0, sticky="e", **pad)
-        ttk.Combobox(frm, textvariable=self.var_env, width=22, state="readonly",
-                     values=["production", "test"]).grid(row=2, column=1, sticky="w", **pad)
-        ttk.Label(frm, text="(production=운영 oapi / test=상자테스트 sboapi)").grid(
-            row=2, column=2, columnspan=3, sticky="w", **pad)
+        # 안내: 인증정보는 상단 [설정] 메뉴에서 입력 (메인 화면에는 표시하지 않음)
+        info = ttk.Frame(root)
+        info.pack(fill="x", padx=10, pady=(10, 0))
+        ttk.Label(info, text="인증 정보는 상단 [설정] 메뉴 → '인증 정보 설정...' 에서 입력하세요.",
+                  foreground="#666").pack(side="left")
 
         cond = ttk.LabelFrame(root, text="조회 조건 (선택 — 비우면 전체)")
         cond.pack(fill="x", padx=10, pady=4)
@@ -201,7 +243,6 @@ class App(tk.Tk):
         btns.pack(fill="x", padx=10, pady=4)
         self.btn_query = ttk.Button(btns, text="재고현황 조회", command=self._on_query)
         self.btn_query.pack(side="left", padx=4)
-        ttk.Button(btns, text="설정 저장", command=self._save_config).pack(side="left", padx=4)
         self.btn_inv_csv = ttk.Button(btns, text="CSV 내보내기",
                                       command=lambda: export_rows_csv(self._inventory_display, "inventory.csv"),
                                       state="disabled")
@@ -222,7 +263,8 @@ class App(tk.Tk):
         tf.columnconfigure(0, weight=1)
 
     def _toggle_key(self) -> None:
-        self.ent_key.configure(show="" if self.var_show_key.get() else "*")
+        if self.ent_key is not None:
+            self.ent_key.configure(show="" if self.var_show_key.get() else "*")
 
     # ================= 탭2: 가격비교 =================
     def _build_compare_tab(self) -> None:
@@ -325,7 +367,7 @@ class App(tk.Tk):
         self.var_key.set(cfg.get("API_CERT_KEY", ""))
         self.var_env.set(cfg.get("ENV", "production"))
         self._update_url = cfg.get("update_url", "")
-        self._github_repo = cfg.get("github_repo", "")
+        self.var_github.set(cfg.get("github_repo", ""))
         payload = (cfg.get("inventory") or {}).get("payload", {})
         self.var_base_date.set(payload.get("BASE_DATE", ""))
         self.var_prod.set(payload.get("PROD_CD", ""))
@@ -339,7 +381,7 @@ class App(tk.Tk):
             "LAN_TYPE": "ko-KR",
             "ENV": self.var_env.get(),
             "update_url": getattr(self, "_update_url", ""),
-            "github_repo": getattr(self, "_github_repo", ""),
+            "github_repo": self.var_github.get().strip(),
             "inventory": {
                 "endpoint": "/OAPI/V2/InventoryBalance/GetListInventoryBalanceStatus",
                 "payload": {
