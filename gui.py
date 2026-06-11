@@ -51,7 +51,20 @@ def app_data_dir() -> str:
 CONFIG_PATH = os.path.join(app_data_dir(), "config.json")
 
 
-def fill_tree(tree: ttk.Treeview, rows: list[dict]) -> None:
+def _sort_key(value) -> tuple:
+    """정렬 키: 숫자로 해석되면 숫자 기준, 아니면 문자 기준(콤마 제거)."""
+    s = str(value).replace(",", "").strip()
+    try:
+        return (0, float(s))
+    except ValueError:
+        return (1, str(value))
+
+
+def fill_tree(tree: ttk.Treeview, rows: list[dict],
+              sort_callback=None, sort_col: str | None = None,
+              sort_desc: bool = False) -> None:
+    import tkinter.font as tkfont
+
     tree.delete(*tree.get_children())
     if not rows:
         tree["columns"] = ()
@@ -62,9 +75,25 @@ def fill_tree(tree: ttk.Treeview, rows: list[dict]) -> None:
             if not k.startswith("_") and k not in headers:
                 headers.append(k)
     tree["columns"] = headers
+
+    # 내용에 맞춘 열 너비 자동 최적화
+    fnt = tkfont.Font(family=FONT, size=10)
+    fnt_b = tkfont.Font(family=FONT, size=10, weight="bold")
     for h in headers:
-        tree.heading(h, text=h, anchor="center")
-        tree.column(h, width=108, anchor="center", stretch=False)
+        arrow = (" ▼" if sort_desc else " ▲") if h == sort_col else ""
+        head_text = f"{h}{arrow}"
+        if sort_callback is not None:
+            tree.heading(h, text=head_text, anchor="center",
+                         command=lambda c=h: sort_callback(c))
+        else:
+            tree.heading(h, text=head_text, anchor="center")
+        # 헤더(화살표 여유 포함) + 모든 셀 중 최대 픽셀폭
+        w = fnt_b.measure(head_text + "  ")
+        for r in rows:
+            w = max(w, fnt.measure(str(r.get(h, ""))))
+        w = min(max(w + 26, 60), 420)   # 여백 + 최소/최대 제한
+        tree.column(h, width=w, anchor="center", stretch=False)
+
     tree.tag_configure("subtotal", background=SUBTOTAL_BG, font=(FONT, 10, "bold"))
     tree.tag_configure("odd", background=ROW_ALT)
     tree.tag_configure("even", background="white")
@@ -117,6 +146,8 @@ class App(tk.Tk):
         self._inventory_display: list[dict] = []  # 파싱 컬럼 포함 표시용(필터 적용 후)
         self._inventory_display_all: list[dict] = []  # 필터 전 전체(재필터용)
         self._inv_status_suffix: str = ""
+        self._sort_col: str | None = None    # 정렬 기준 열(헤더 클릭)
+        self._sort_desc: bool = False        # 내림차순 여부
         self._inventory_raw: dict | None = None
         self._compare_rows: list[dict] = []
         self._update_url: str = ""
@@ -643,10 +674,16 @@ class App(tk.Tk):
             if (not bf or bf in str(d.get("브랜드", "")).lower())
             and (not mf or mf in str(d.get("모델명", "")).lower())
         ]
-        filtered.sort(key=lambda d: (str(d.get("브랜드", "")), str(d.get("품목코드", "")),
-                                     str(d.get("창고코드", ""))))
+        if self._sort_col:   # 헤더 클릭 정렬(오름/내림)
+            col = self._sort_col
+            filtered.sort(key=lambda d: _sort_key(d.get(col, "")), reverse=self._sort_desc)
+        else:                # 기본: 브랜드 순
+            filtered.sort(key=lambda d: (str(d.get("브랜드", "")), str(d.get("품목코드", "")),
+                                         str(d.get("창고코드", ""))))
         self._inventory_display = cmp.add_subtotals(filtered)
-        fill_tree(self.tree_inv, self._inventory_display)
+        fill_tree(self.tree_inv, self._inventory_display,
+                  sort_callback=self._on_sort_column,
+                  sort_col=self._sort_col, sort_desc=self._sort_desc)
 
         total = len(allrows)
         shown = len(filtered)
@@ -660,6 +697,17 @@ class App(tk.Tk):
         """조회조건(브랜드/모델명) 변경 시: 이미 받아온 데이터에서 즉시 재필터(재조회 없음)."""
         if getattr(self, "_inventory_display_all", []):
             self._render_inventory()
+
+    def _on_sort_column(self, col: str) -> None:
+        """열 머리글 클릭: 같은 열이면 오름↔내림 토글, 다른 열이면 그 열 오름차순."""
+        if not getattr(self, "_inventory_display_all", []):
+            return
+        if self._sort_col == col:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort_col = col
+            self._sort_desc = False
+        self._render_inventory()
 
 
 def main() -> None:
