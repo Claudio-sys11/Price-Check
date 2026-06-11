@@ -31,12 +31,14 @@ TEXT = "#1f2937"        # 본문 텍스트
 SUBTLE = "#374151"      # 라벨프레임 제목
 MUTED = "#6b7280"       # 보조 텍스트
 BORDER = "#d1d5db"      # 테두리
-ACCENT = "#4f46e5"      # 강조(인디고)
-ACCENT_ACTIVE = "#4338ca"
-HEADING_BG = "#eef2ff"  # 표 헤더 배경
-HEADING_FG = "#3730a3"  # 표 헤더 글자
-ROW_ALT = "#f9fafb"     # 표 줄무늬(홀수행)
-SUBTOTAL_BG = "#e7eefc"  # 소계 행 강조
+ACCENT = "#14b8a6"      # 강조(민트/틸)
+ACCENT_ACTIVE = "#0d9488"
+ACCENT_SOFT = "#cbf5ec"  # 민트 연한톤(헤더 보조 텍스트 등)
+HEADING_BG = "#e0f7f1"  # 표 헤더 배경(연한 민트)
+HEADING_FG = "#0f766e"  # 표 헤더 글자(진한 틸)
+ROW_ALT = "#f5fbf9"     # 표 줄무늬(홀수행, 민트 기운)
+SUBTOTAL_BG = "#d7f5ed"  # 소계 행 강조(민트)
+SELECT_BG = "#a7e8da"   # 표 선택행(민트)
 
 
 def app_data_dir() -> str:
@@ -176,8 +178,8 @@ class App(tk.Tk):
         style.configure("Accent.TButton", background=ACCENT, foreground="white",
                         relief="flat", padding=(14, 7), font=(FONT, 10, "bold"))
         style.map("Accent.TButton",
-                  background=[("active", ACCENT_ACTIVE), ("disabled", "#c7c9f0")],
-                  foreground=[("disabled", "#eef0ff")])
+                  background=[("active", ACCENT_ACTIVE), ("disabled", "#a7ddd4")],
+                  foreground=[("disabled", "#e6fffa")])
         style.configure("TCheckbutton", background=BG, foreground=TEXT)
         # 노트북 탭
         style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(6, 6, 6, 0))
@@ -190,9 +192,9 @@ class App(tk.Tk):
                         foreground=TEXT, rowheight=29, font=(FONT, 10), borderwidth=0)
         style.configure("Treeview.Heading", background=HEADING_BG, foreground=HEADING_FG,
                         font=(FONT, 10, "bold"), relief="flat", padding=6)
-        style.map("Treeview.Heading", background=[("active", "#dfe3ff")])
-        style.map("Treeview", background=[("selected", "#c7d2fe")],
-                  foreground=[("selected", "#111827")])
+        style.map("Treeview.Heading", background=[("active", "#cdeee6")])
+        style.map("Treeview", background=[("selected", SELECT_BG)],
+                  foreground=[("selected", "#0f3d36")])
 
     def _build_header(self) -> None:
         bar = tk.Frame(self, bg=ACCENT, height=60)
@@ -202,15 +204,17 @@ class App(tk.Tk):
         inner.pack(fill="both", expand=True, padx=18)
         tk.Label(inner, text="EcountERP 재고현황 · Wizfasta 가격비교", bg=ACCENT, fg="white",
                  font=(FONT, 15, "bold")).pack(side="left", pady=12)
-        tk.Label(inner, text=f"v{APP_VERSION}", bg=ACCENT, fg="#dfe3ff",
+        tk.Label(inner, text=f"v{APP_VERSION}", bg=ACCENT, fg=ACCENT_SOFT,
                  font=(FONT, 10)).pack(side="left", padx=10, pady=16)
-        tk.Label(inner, text="설정 ▸ 인증 정보에서 키를 입력하세요", bg=ACCENT, fg="#c7cbf5",
+        tk.Label(inner, text="설정 ▸ 인증 정보에서 키를 입력하세요", bg=ACCENT, fg=ACCENT_SOFT,
                  font=(FONT, 9)).pack(side="right", pady=18)
 
     # ================= 상단 메뉴 / 설정 =================
     def _build_menu(self) -> None:
-        menubar = tk.Menu(self)
-        settings_menu = tk.Menu(menubar, tearoff=0)
+        menubar = tk.Menu(self, background=ACCENT, foreground="white",
+                          activebackground=ACCENT_ACTIVE, activeforeground="white")
+        settings_menu = tk.Menu(menubar, tearoff=0, background="white", foreground=TEXT,
+                                activebackground=ACCENT, activeforeground="white")
         settings_menu.add_command(label="인증 정보 설정...", command=self._open_settings)
         settings_menu.add_separator()
         settings_menu.add_command(label="종료", command=self.destroy)
@@ -596,7 +600,10 @@ class App(tk.Tk):
         # 실제 데이터 행(소계 제외)
         data_rows = [d for d in display if not d.get("_subtotal")]
         has_name = any(d.get("브랜드") for d in data_rows)   # 품목명 분해 성공 여부
-        has_price = any(d.get("입고단가") for d in data_rows)  # 입고단가 연동 여부
+        has_price = any(
+            str(d.get("입고단가", "")).replace(",", "").lstrip("-") not in ("", "0")
+            for d in data_rows
+        )  # 입고단가 연동 여부(0 제외)
         has_wh = any("창고코드" in d for d in data_rows)
         self.btn_inv_csv.configure(state="normal")
         if has_name or has_price:

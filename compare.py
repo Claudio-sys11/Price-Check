@@ -120,8 +120,8 @@ def build_inventory_display(
         if whn_f:
             row["창고명"] = str(r.get(whn_f, "") or "")
         row["재고수량"] = qty
-        row["입고단가"] = price
-        row["총단가"] = total
+        row["입고단가"] = f"{price:,}"   # 천단위 콤마
+        row["총단가"] = f"{total:,}"
         out.append(row)
     return out
 
@@ -162,8 +162,8 @@ def add_subtotals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         label_col = "창고명" if "창고명" in sub else "품목코드"
         sub[label_col] = "▸ 소계/평균"
         sub["재고수량"] = int(sum_qty)
-        sub["입고단가"] = int(round(avg))    # 평균 단가
-        sub["총단가"] = int(round(sum_total))
+        sub["입고단가"] = f"{int(round(avg)):,}"    # 평균 단가(천단위 콤마)
+        sub["총단가"] = f"{int(round(sum_total)):,}"
         sub["_subtotal"] = True
         out.append(sub)
     return out
