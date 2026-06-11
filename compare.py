@@ -28,6 +28,12 @@ from typing import Any
 _CODE_CANDIDATES = ["PROD_CD", "PROD_CODE", "ITEM_CD", "품목코드", "상품코드", "PRODCD"]
 _QTY_CANDIDATES = ["BAL_QTY", "QTY", "STOCK", "재고", "수량", "INV_QTY", "현재고"]
 _PRICE_CANDIDATES = ["IN_PRICE", "PRICE", "단가", "COST", "UNIT_PRICE", "AMT", "원가"]
+# 재고현황(ByLocation 등) 응답에 함께 오는 추가 항목
+_NAME_CANDIDATES = ["PROD_DES", "PROD_NAME", "품목명", "상품명", "ITEM_NAME"]
+_SIZE_CANDIDATES = ["PROD_SIZE_DES", "SIZE_DES", "규격", "사이즈명"]
+_WH_CANDIDATES = ["WH_CD", "창고코드"]
+_WHNAME_CANDIDATES = ["WH_DES", "창고명"]
+_BARCODE_CANDIDATES = ["BAR_CODE", "BARCODE", "바코드", "EAN", "UPC"]
 
 
 def parse_product_name(name: str) -> dict[str, str]:
@@ -63,15 +69,28 @@ def build_inventory_display(
     브랜드/상품코드/사이즈/입고일자 4개 컬럼으로 분해해 앞쪽에 배치한다.
     품목명을 못 구하면 해당 컬럼은 빈 값으로 둔다.
 
-    출력 컬럼: 브랜드 | 모델명 | 사이즈 | 입고일자 | 품목코드 | 품목명 | 재고수량
+    재고현황 응답에 있는 항목(창고/품목명/규격 등)을 가능한 한 모두 연동한다.
+    품목명(PROD_DES)이 응답에 있으면(ByLocation 등) 그것을, 없으면 품목 마스터로 보완한다.
+
+    출력 컬럼(있는 것만):
+      브랜드 | 모델명 | 사이즈 | 입고일자 | 품목코드 | 품목명 | 규격 | 창고코드 | 창고명 | 재고수량
     재고수량은 소수점을 제외한 정수로 표현한다.
     """
+    if not inventory_rows:
+        return []
+
     inv_fmap = field_map or detect_ecount_fields(inventory_rows)
     code_f, qty_f = inv_fmap["품목코드"], inv_fmap["재고수량"]
 
-    # 품목코드 -> 품목명 매핑 (품목 마스터가 있을 때)
+    sample = inventory_rows[0]
+    name_f = _pick_field(sample, _NAME_CANDIDATES)       # PROD_DES (품목명, 인라인)
+    size_f = _pick_field(sample, _SIZE_CANDIDATES)       # 규격
+    wh_f = _pick_field(sample, _WH_CANDIDATES)           # 창고코드
+    whn_f = _pick_field(sample, _WHNAME_CANDIDATES)      # 창고명
+
+    # 품목명이 재고 응답에 없으면 품목 마스터로 보완
     name_map: dict[str, str] = {}
-    if product_rows:
+    if not name_f and product_rows:
         pfmap = product_field_map or detect_product_fields(product_rows)
         pcode, pname = pfmap["품목코드"], pfmap["품목명"]
         if pcode and pname:
@@ -83,18 +102,24 @@ def build_inventory_display(
     out = []
     for r in inventory_rows:
         code = str(r.get(code_f, "")).strip() if code_f else ""
-        name = name_map.get(code, "")
+        name = str(r.get(name_f, "") or "") if name_f else name_map.get(code, "")
         parsed = parse_product_name(name)
-        qty = int(_to_number(r.get(qty_f))) if qty_f else ""  # 소수점 제외 정수
-        out.append({
+        row: dict[str, Any] = {
             "브랜드": parsed["브랜드"],
             "모델명": parsed["모델명"],
             "사이즈": parsed["사이즈"],
             "입고일자": parsed["입고일자"],
             "품목코드": code,
             "품목명": name,
-            "재고수량": qty,
-        })
+        }
+        if size_f:
+            row["규격"] = str(r.get(size_f, "") or "")
+        if wh_f:
+            row["창고코드"] = str(r.get(wh_f, "") or "")
+        if whn_f:
+            row["창고명"] = str(r.get(whn_f, "") or "")
+        row["재고수량"] = int(_to_number(r.get(qty_f))) if qty_f else ""
+        out.append(row)
     return out
 
 
@@ -203,9 +228,7 @@ def build_comparison(
 
 
 # ===== 모델번호 매칭 (EcountERP 품목명/바코드 ↔ Wizfasta 모델번호) =====
-
-_NAME_CANDIDATES = ["PROD_DES", "PROD_NAME", "품목명", "상품명", "ITEM_NAME"]
-_BARCODE_CANDIDATES = ["BAR_CODE", "BARCODE", "바코드", "EAN", "UPC"]
+# (_NAME_CANDIDATES, _BARCODE_CANDIDATES 는 상단에 정의됨)
 
 
 def extract_model_tokens(model_name: str) -> list[str]:

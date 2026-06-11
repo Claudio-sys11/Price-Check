@@ -417,20 +417,23 @@ class App(tk.Tk):
             pass
         threading.Thread(target=self._do_query, args=(cfg,), daemon=True).start()
 
+    # 재고현황 엔드포인트: 풍부한 ByLocation(창고/품목명/규격 포함) 우선, 권한 없으면 기본으로 폴백
+    RICH_EP = "/OAPI/V2/InventoryBalance/GetListInventoryBalanceStatusByLocation"
+    BASIC_EP = "/OAPI/V2/InventoryBalance/GetListInventoryBalanceStatus"
+
     def _do_query(self, cfg: dict) -> None:
+        from datetime import date
         try:
             client = EcountClient(
                 com_code=cfg["COM_CODE"], user_id=cfg["USER_ID"],
                 api_cert_key=cfg["API_CERT_KEY"], lan_type=cfg.get("LAN_TYPE", "ko-KR"),
                 env=cfg.get("ENV", "production"),
             )
-            inv = cfg["inventory"]
-            payload = {k: v for k, v in inv["payload"].items() if v}
-            # GetListInventoryBalanceStatus 는 BASE_DATE 가 필수 → 비어 있으면 오늘 날짜 사용
+            payload = {k: v for k, v in cfg["inventory"]["payload"].items() if v}
             if not payload.get("BASE_DATE"):
-                from datetime import date
                 payload["BASE_DATE"] = date.today().strftime("%Y%m%d")
-            data = client.fetch_inventory(endpoint=inv["endpoint"], payload=payload)
+            client.get_zone()
+            client.login()  # 한 번만 로그인 (이후 엔드포인트 재시도에 세션 재사용)
         except EcountApiError as exc:
             self.after(0, self._query_failed, str(exc))
             return
@@ -438,21 +441,29 @@ class App(tk.Tk):
             self.after(0, self._query_failed, f"예기치 못한 오류: {exc}")
             return
 
-        rows = cmp.extract_ecount_rows(data)
-
-        # 품목명(브랜드_상품코드_사이즈_입고일자) 분해를 위해 품목 마스터도 조회 시도
         product_rows: list[dict] = []
-        product_note = ""
+        note = ""
         try:
-            pdata = client.get_products()
-            product_rows = cmp.extract_ecount_rows(pdata)
+            # 1순위: 창고별 재고현황 (창고코드/창고명/품목명/규격/재고 모두 포함)
+            data = client.get_inventory(endpoint=self.RICH_EP, payload=payload)
+            rows = cmp.extract_ecount_rows(data)
         except EcountApiError as exc:
-            product_note = str(exc)
-        except Exception as exc:  # noqa: BLE001
-            product_note = f"품목 조회 오류: {exc}"
+            # 권한 없으면 기본 재고현황으로 대체
+            note = f"창고별 재고(ByLocation) 사용 불가 → 기본 재고로 대체. 사유: {exc}"
+            try:
+                data = client.get_inventory(endpoint=self.BASIC_EP, payload=payload)
+                rows = cmp.extract_ecount_rows(data)
+            except EcountApiError as exc2:
+                self.after(0, self._query_failed, str(exc2))
+                return
+            # 기본 엔드포인트엔 품목명이 없으니 품목 마스터로 보완 시도
+            try:
+                product_rows = cmp.extract_ecount_rows(client.get_products())
+            except EcountApiError:
+                pass
 
         display = cmp.build_inventory_display(rows, product_rows)
-        self.after(0, self._query_done, data, rows, display, product_note)
+        self.after(0, self._query_done, data, rows, display, note)
 
     def _query_failed(self, msg: str) -> None:
         self.btn_query.configure(state="normal")
@@ -476,21 +487,24 @@ class App(tk.Tk):
             )
             return
 
-        # 품목명을 가져왔는지(=브랜드/상품코드/사이즈/입고일자 채워졌는지) 확인
+        # 품목명을 가져왔는지(=브랜드/모델명/사이즈/입고일자 채워졌는지) 확인
         has_name = any(d.get("품목명") for d in display)
+        has_wh = any("창고코드" in d for d in display)
         self.btn_inv_csv.configure(state="normal")
         if has_name:
-            self.status.set(f"완료 — {len(rows)}건 (품목명 분해 적용)")
+            extra = " + 창고별" if has_wh else ""
+            self.status.set(f"완료 — {len(rows)}건 (품목명 분해{extra} 적용)")
         else:
-            self.status.set(f"완료 — {len(rows)}건 (품목명 미적용: 품목 조회 API 권한 필요)")
+            self.status.set(f"완료 — {len(rows)}건 (품목명 미적용: 창고별/품목 조회 API 권한 필요)")
             if product_note:
                 messagebox.showwarning(
-                    "품목명 분해 불가",
-                    "재고수량은 조회됐지만 브랜드/상품코드/사이즈/입고일자 컬럼을 채울 "
+                    "재고 항목 일부 미연동",
+                    "재고수량은 조회됐지만 브랜드/모델명/사이즈/입고일자·창고 정보를 채울 "
                     "품목명을 가져오지 못했습니다.\n\n"
                     f"사유: {product_note}\n\n"
-                    "EcountERP에서 '품목 조회(GetBasicProductsList)' API 권한을 켜면 "
-                    "다음 조회부터 자동으로 분해됩니다.",
+                    "EcountERP에서 '창고별 재고현황(GetListInventoryBalanceStatusByLocation)' "
+                    "또는 '품목 조회(GetBasicProductsList)' API 권한을 켜면 다음 조회부터 "
+                    "자동으로 모든 항목이 채워집니다.",
                 )
 
 
