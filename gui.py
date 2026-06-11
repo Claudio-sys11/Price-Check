@@ -114,7 +114,9 @@ class App(tk.Tk):
         self.configure(bg=BG)
 
         self._inventory_rows: list[dict] = []   # 탭1 조회 결과(원본: 가격비교 탭에서 사용)
-        self._inventory_display: list[dict] = []  # 파싱 컬럼 포함 표시용
+        self._inventory_display: list[dict] = []  # 파싱 컬럼 포함 표시용(필터 적용 후)
+        self._inventory_display_all: list[dict] = []  # 필터 전 전체(재필터용)
+        self._inv_status_suffix: str = ""
         self._inventory_raw: dict | None = None
         self._compare_rows: list[dict] = []
         self._update_url: str = ""
@@ -330,9 +332,14 @@ class App(tk.Tk):
         ttk.Label(cond, text="기준일자(YYYYMMDD)").grid(row=0, column=0, sticky="e", **pad)
         ttk.Entry(cond, textvariable=self.var_base_date, width=16).grid(row=0, column=1, sticky="w", **pad)
         ttk.Label(cond, text="브랜드").grid(row=0, column=2, sticky="e", **pad)
-        ttk.Entry(cond, textvariable=self.var_brand, width=18).grid(row=0, column=3, sticky="w", **pad)
+        ent_brand = ttk.Entry(cond, textvariable=self.var_brand, width=18)
+        ent_brand.grid(row=0, column=3, sticky="w", **pad)
         ttk.Label(cond, text="모델명").grid(row=0, column=4, sticky="e", **pad)
-        ttk.Entry(cond, textvariable=self.var_model, width=18).grid(row=0, column=5, sticky="w", **pad)
+        ent_model = ttk.Entry(cond, textvariable=self.var_model, width=18)
+        ent_model.grid(row=0, column=5, sticky="w", **pad)
+        # 조회 후 브랜드/모델명을 바꾸면 재조회 없이 즉시 재필터
+        ent_brand.bind("<KeyRelease>", self._on_filter_change)
+        ent_model.bind("<KeyRelease>", self._on_filter_change)
         ttk.Label(cond, text="품목코드").grid(row=1, column=0, sticky="e", **pad)
         ttk.Entry(cond, textvariable=self.var_prod, width=16).grid(row=1, column=1, sticky="w", **pad)
         ttk.Label(cond, text="창고코드").grid(row=1, column=2, sticky="e", **pad)
@@ -510,8 +517,6 @@ class App(tk.Tk):
         if not cfg["COM_CODE"] or not cfg["USER_ID"] or not cfg["API_CERT_KEY"]:
             messagebox.showwarning("입력 필요", "회사코드 / 사용자ID / API 인증키를 모두 입력하세요.")
             return
-        self._model_filter = self.var_model.get().strip()   # 모델명 필터(메인 스레드에서 캡처)
-        self._brand_filter = self.var_brand.get().strip()    # 브랜드 필터
         self.btn_query.configure(state="disabled")
         self.btn_inv_csv.configure(state="disabled")
         self.status.set("조회 중...")
@@ -571,19 +576,9 @@ class App(tk.Tk):
             else:
                 note = f"입고단가 미연동(품목 조회 불가): {exc}"
 
-        display = cmp.build_inventory_display(rows, product_rows)
-        # 브랜드·모델명 부분일치 필터(클라이언트측)
-        bf = getattr(self, "_brand_filter", "").strip().lower()
-        mf = getattr(self, "_model_filter", "").strip().lower()
-        if bf:
-            display = [d for d in display if bf in str(d.get("브랜드", "")).lower()]
-        if mf:
-            display = [d for d in display if mf in str(d.get("모델명", "")).lower()]
-        # 브랜드 순 정렬(품목코드/창고코드 보조 — 소계 그룹 유지)
-        display.sort(key=lambda d: (str(d.get("브랜드", "")), str(d.get("품목코드", "")),
-                                    str(d.get("창고코드", ""))))
-        display = cmp.add_subtotals(display)   # 동일 품목코드 그룹 하단에 중간합계(평균 단가)
-        self.after(0, self._query_done, data, rows, display, note)
+        # 필터 전 전체 데이터 행(소계/정렬 없이). 필터/정렬/소계는 표시 단계에서 처리.
+        all_display = cmp.build_inventory_display(rows, product_rows)
+        self.after(0, self._query_done, data, rows, all_display, note)
 
     def _query_failed(self, msg: str) -> None:
         self.btn_query.configure(state="normal")
@@ -591,13 +586,14 @@ class App(tk.Tk):
         messagebox.showerror("조회 실패", msg)
 
     def _query_done(self, data: dict, rows: list[dict],
-                    display: list[dict], product_note: str = "") -> None:
+                    all_display: list[dict], product_note: str = "") -> None:
         self._inventory_raw = data
-        self._inventory_rows = rows            # 원본(가격비교 탭에서 사용)
-        self._inventory_display = display      # 파싱 컬럼 포함(표/CSV 표시용)
+        self._inventory_rows = rows                  # 원본(가격비교 탭에서 사용)
+        self._inventory_display_all = all_display    # 필터 전 전체(재필터용)
         self.btn_query.configure(state="normal")
-        fill_tree(self.tree_inv, display)
         if not rows:
+            self._inventory_display = []
+            fill_tree(self.tree_inv, [])
             self.status.set("완료 — 표시할 행 없음")
             self.btn_inv_csv.configure(state="normal")
             messagebox.showinfo(
@@ -607,24 +603,22 @@ class App(tk.Tk):
             )
             return
 
-        # 실제 데이터 행(소계 제외)
-        data_rows = [d for d in display if not d.get("_subtotal")]
-        has_name = any(d.get("브랜드") for d in data_rows)   # 품목명 분해 성공 여부
+        # 연동 항목 안내(상태바 접두)
+        has_name = any(d.get("브랜드") for d in all_display)
         has_price = any(
             str(d.get("입고단가", "")).replace(",", "").lstrip("-") not in ("", "0")
-            for d in data_rows
-        )  # 입고단가 연동 여부(0 제외)
-        has_wh = any("창고코드" in d for d in data_rows)
-        self.btn_inv_csv.configure(state="normal")
+            for d in all_display
+        )
+        has_wh = any("창고코드" in d for d in all_display)
         if has_name or has_price:
             parts = []
             if has_name:
                 parts.append("품목명 분해" + (" + 창고별" if has_wh else ""))
             if has_price:
                 parts.append("입고단가/총단가")
-            self.status.set(f"완료 — {len(rows)}건 ({', '.join(parts)} 적용, 소계 포함)")
+            self._inv_status_suffix = f"({', '.join(parts)} 적용, 소계 포함)"
         else:
-            self.status.set(f"완료 — {len(rows)}건 (품목명/입고단가 미적용: 창고별/품목 조회 API 권한 필요)")
+            self._inv_status_suffix = "(품목명/입고단가 미적용: 창고별/품목 조회 API 권한 필요)"
             if product_note:
                 messagebox.showwarning(
                     "재고 항목 일부 미연동",
@@ -635,6 +629,37 @@ class App(tk.Tk):
                     "또는 '품목 조회(GetBasicProductsList)' API 권한을 켜면 다음 조회부터 "
                     "자동으로 모든 항목이 채워집니다.",
                 )
+
+        self.btn_inv_csv.configure(state="normal")
+        self._render_inventory(initial=True)
+
+    def _render_inventory(self, initial: bool = False) -> None:
+        """이미 받아온 전체 데이터에 현재 브랜드/모델명 필터 + 브랜드 정렬 + 소계를 적용해 표시."""
+        allrows = getattr(self, "_inventory_display_all", [])
+        bf = self.var_brand.get().strip().lower()
+        mf = self.var_model.get().strip().lower()
+        filtered = [
+            d for d in allrows
+            if (not bf or bf in str(d.get("브랜드", "")).lower())
+            and (not mf or mf in str(d.get("모델명", "")).lower())
+        ]
+        filtered.sort(key=lambda d: (str(d.get("브랜드", "")), str(d.get("품목코드", "")),
+                                     str(d.get("창고코드", ""))))
+        self._inventory_display = cmp.add_subtotals(filtered)
+        fill_tree(self.tree_inv, self._inventory_display)
+
+        total = len(allrows)
+        shown = len(filtered)
+        suffix = getattr(self, "_inv_status_suffix", "")
+        if shown == total:
+            self.status.set(f"완료 — {total}건 {suffix}".rstrip())
+        else:
+            self.status.set(f"필터 {shown}건 / 전체 {total}건 {suffix}".rstrip())
+
+    def _on_filter_change(self, event=None) -> None:
+        """조회조건(브랜드/모델명) 변경 시: 이미 받아온 데이터에서 즉시 재필터(재조회 없음)."""
+        if getattr(self, "_inventory_display_all", []):
+            self._render_inventory()
 
 
 def main() -> None:
