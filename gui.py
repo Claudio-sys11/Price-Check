@@ -23,6 +23,21 @@ from version import APP_VERSION
 
 APP_NAME = "EcountInventory"
 
+# ===== 디자인 팔레트 =====
+FONT = "Segoe UI"
+BG = "#f3f4f6"          # 전체 배경(연한 회색)
+CARD = "#ffffff"        # 카드/표 배경
+TEXT = "#1f2937"        # 본문 텍스트
+SUBTLE = "#374151"      # 라벨프레임 제목
+MUTED = "#6b7280"       # 보조 텍스트
+BORDER = "#d1d5db"      # 테두리
+ACCENT = "#4f46e5"      # 강조(인디고)
+ACCENT_ACTIVE = "#4338ca"
+HEADING_BG = "#eef2ff"  # 표 헤더 배경
+HEADING_FG = "#3730a3"  # 표 헤더 글자
+ROW_ALT = "#f9fafb"     # 표 줄무늬(홀수행)
+SUBTOTAL_BG = "#e7eefc"  # 소계 행 강조
+
 
 def app_data_dir() -> str:
     base = os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -47,10 +62,17 @@ def fill_tree(tree: ttk.Treeview, rows: list[dict]) -> None:
     tree["columns"] = headers
     for h in headers:
         tree.heading(h, text=h, anchor="center")
-        tree.column(h, width=110, anchor="center", stretch=False)
-    tree.tag_configure("subtotal", background="#e7eefc", font=("", 9, "bold"))
+        tree.column(h, width=108, anchor="center", stretch=False)
+    tree.tag_configure("subtotal", background=SUBTOTAL_BG, font=(FONT, 10, "bold"))
+    tree.tag_configure("odd", background=ROW_ALT)
+    tree.tag_configure("even", background="white")
+    i = 0
     for r in rows:
-        tags = ("subtotal",) if r.get("_subtotal") else ()
+        if r.get("_subtotal"):
+            tags: tuple = ("subtotal",)
+        else:
+            tags = ("odd",) if (i % 2) else ("even",)
+            i += 1
         tree.insert("", "end", values=[r.get(h, "") for h in headers], tags=tags)
 
 
@@ -85,8 +107,9 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"EcountERP 재고현황 / Wizfasta 가격비교  v{APP_VERSION}")
-        self.geometry("1000x680")
-        self.minsize(860, 560)
+        self.geometry("1120x720")
+        self.minsize(940, 600)
+        self.configure(bg=BG)
 
         self._inventory_rows: list[dict] = []   # 탭1 조회 결과(원본: 가격비교 탭에서 사용)
         self._inventory_display: list[dict] = []  # 파싱 컬럼 포함 표시용
@@ -101,16 +124,19 @@ class App(tk.Tk):
         self.var_env = tk.StringVar(value="production")
         self.var_show_key = tk.BooleanVar(value=False)
         self.var_github = tk.StringVar()
+        self.var_model = tk.StringVar()      # 조회조건: 모델명 필터(클라이언트측)
         self.ent_key: ttk.Entry | None = None
 
+        self._apply_theme()
         self._build_menu()
+        self._build_header()
 
         nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True)
-        self.tab_inv = ttk.Frame(nb)
-        self.tab_cmp = ttk.Frame(nb)
-        nb.add(self.tab_inv, text="① 재고현황 조회")
-        nb.add(self.tab_cmp, text="② 가격비교")
+        nb.pack(fill="both", expand=True, padx=14, pady=(6, 12))
+        self.tab_inv = ttk.Frame(nb, style="Tab.TFrame")
+        self.tab_cmp = ttk.Frame(nb, style="Tab.TFrame")
+        nb.add(self.tab_inv, text="  재고현황 조회  ")
+        nb.add(self.tab_cmp, text="  가격비교  ")
 
         self._build_inventory_tab()
         self._build_compare_tab()
@@ -118,6 +144,68 @@ class App(tk.Tk):
 
         # 실행 시 백그라운드로 업데이트 확인
         self.after(800, self._start_update_check)
+
+    # ================= 디자인 테마 =================
+    def _apply_theme(self) -> None:
+        self.option_add("*Font", (FONT, 10))
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure(".", background=BG, foreground=TEXT, font=(FONT, 10))
+        style.configure("TFrame", background=BG)
+        style.configure("Tab.TFrame", background=BG)
+        style.configure("Card.TFrame", background=CARD)
+        style.configure("TLabel", background=BG, foreground=TEXT)
+        style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=(FONT, 9))
+        style.configure("Status.TLabel", background=BG, foreground=ACCENT, font=(FONT, 9, "bold"))
+        # 입력
+        style.configure("TEntry", fieldbackground="white", bordercolor=BORDER, relief="flat", padding=4)
+        style.configure("TCombobox", fieldbackground="white", bordercolor=BORDER, padding=4)
+        # 카드형 LabelFrame
+        style.configure("TLabelframe", background=BG, bordercolor=BORDER,
+                        relief="solid", borderwidth=1)
+        style.configure("TLabelframe.Label", background=BG, foreground=SUBTLE,
+                        font=(FONT, 10, "bold"))
+        # 버튼 (기본=보조, Accent=주요)
+        style.configure("TButton", background="#e5e7eb", foreground=TEXT,
+                        bordercolor=BORDER, relief="flat", padding=(12, 7), font=(FONT, 10))
+        style.map("TButton", background=[("active", "#d1d5db"), ("disabled", "#f0f1f3")],
+                  foreground=[("disabled", "#9ca3af")])
+        style.configure("Accent.TButton", background=ACCENT, foreground="white",
+                        relief="flat", padding=(14, 7), font=(FONT, 10, "bold"))
+        style.map("Accent.TButton",
+                  background=[("active", ACCENT_ACTIVE), ("disabled", "#c7c9f0")],
+                  foreground=[("disabled", "#eef0ff")])
+        style.configure("TCheckbutton", background=BG, foreground=TEXT)
+        # 노트북 탭
+        style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(6, 6, 6, 0))
+        style.configure("TNotebook.Tab", background="#e5e7eb", foreground=MUTED,
+                        padding=(18, 9), font=(FONT, 10, "bold"), borderwidth=0)
+        style.map("TNotebook.Tab", background=[("selected", CARD)],
+                  foreground=[("selected", ACCENT)])
+        # 표(Treeview)
+        style.configure("Treeview", background="white", fieldbackground="white",
+                        foreground=TEXT, rowheight=29, font=(FONT, 10), borderwidth=0)
+        style.configure("Treeview.Heading", background=HEADING_BG, foreground=HEADING_FG,
+                        font=(FONT, 10, "bold"), relief="flat", padding=6)
+        style.map("Treeview.Heading", background=[("active", "#dfe3ff")])
+        style.map("Treeview", background=[("selected", "#c7d2fe")],
+                  foreground=[("selected", "#111827")])
+
+    def _build_header(self) -> None:
+        bar = tk.Frame(self, bg=ACCENT, height=60)
+        bar.pack(fill="x")
+        bar.pack_propagate(False)
+        inner = tk.Frame(bar, bg=ACCENT)
+        inner.pack(fill="both", expand=True, padx=18)
+        tk.Label(inner, text="EcountERP 재고현황 · Wizfasta 가격비교", bg=ACCENT, fg="white",
+                 font=(FONT, 15, "bold")).pack(side="left", pady=12)
+        tk.Label(inner, text=f"v{APP_VERSION}", bg=ACCENT, fg="#dfe3ff",
+                 font=(FONT, 10)).pack(side="left", padx=10, pady=16)
+        tk.Label(inner, text="설정 ▸ 인증 정보에서 키를 입력하세요", bg=ACCENT, fg="#c7cbf5",
+                 font=(FONT, 9)).pack(side="right", pady=18)
 
     # ================= 상단 메뉴 / 설정 =================
     def _build_menu(self) -> None:
@@ -134,6 +222,7 @@ class App(tk.Tk):
         win.title("설정")
         win.transient(self)
         win.resizable(False, False)
+        win.configure(bg=BG)
         pad = {"padx": 8, "pady": 5}
 
         auth = ttk.LabelFrame(win, text="인증 정보")
@@ -162,7 +251,8 @@ class App(tk.Tk):
 
         btns = ttk.Frame(win)
         btns.pack(fill="x", padx=12, pady=(6, 12))
-        ttk.Button(btns, text="저장", command=lambda: self._save_settings(win)).pack(side="right", padx=4)
+        ttk.Button(btns, text="저장", style="Accent.TButton",
+                   command=lambda: self._save_settings(win)).pack(side="right", padx=4)
         ttk.Button(btns, text="닫기", command=win.destroy).pack(side="right", padx=4)
 
         win.grab_set()
@@ -220,45 +310,49 @@ class App(tk.Tk):
 
     # ================= 탭1: 재고현황 =================
     def _build_inventory_tab(self) -> None:
-        pad = {"padx": 6, "pady": 4}
+        pad = {"padx": 6, "pady": 5}
         root = self.tab_inv
 
-        # 안내: 인증정보는 상단 [설정] 메뉴에서 입력 (메인 화면에는 표시하지 않음)
-        info = ttk.Frame(root)
-        info.pack(fill="x", padx=10, pady=(10, 0))
-        ttk.Label(info, text="인증 정보는 상단 [설정] 메뉴 → '인증 정보 설정...' 에서 입력하세요.",
-                  foreground="#666").pack(side="left")
+        ttk.Label(root, style="Muted.TLabel",
+                  text="인증 정보는 상단 [설정] 메뉴 → '인증 정보 설정…' 에서 입력하세요."
+                  ).pack(fill="x", padx=16, pady=(12, 2))
 
-        cond = ttk.LabelFrame(root, text="조회 조건 (선택 — 비우면 전체)")
-        cond.pack(fill="x", padx=10, pady=4)
+        cond = ttk.LabelFrame(root, text=" 조회 조건  (선택 — 비우면 전체) ")
+        cond.pack(fill="x", padx=16, pady=6, ipady=4)
         self.var_base_date = tk.StringVar()
         self.var_prod = tk.StringVar()
         self.var_wh = tk.StringVar()
         ttk.Label(cond, text="기준일자(YYYYMMDD)").grid(row=0, column=0, sticky="e", **pad)
         ttk.Entry(cond, textvariable=self.var_base_date, width=16).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Label(cond, text="품목코드").grid(row=0, column=2, sticky="e", **pad)
-        ttk.Entry(cond, textvariable=self.var_prod, width=16).grid(row=0, column=3, sticky="w", **pad)
-        ttk.Label(cond, text="창고코드").grid(row=0, column=4, sticky="e", **pad)
-        ttk.Entry(cond, textvariable=self.var_wh, width=16).grid(row=0, column=5, sticky="w", **pad)
+        ttk.Label(cond, text="모델명").grid(row=0, column=2, sticky="e", **pad)
+        ttk.Entry(cond, textvariable=self.var_model, width=18).grid(row=0, column=3, sticky="w", **pad)
+        ttk.Label(cond, text="품목코드").grid(row=1, column=0, sticky="e", **pad)
+        ttk.Entry(cond, textvariable=self.var_prod, width=16).grid(row=1, column=1, sticky="w", **pad)
+        ttk.Label(cond, text="창고코드").grid(row=1, column=2, sticky="e", **pad)
+        ttk.Entry(cond, textvariable=self.var_wh, width=18).grid(row=1, column=3, sticky="w", **pad)
+        ttk.Label(cond, style="Muted.TLabel",
+                  text="※ 모델명은 조회 결과를 부분일치로 필터링합니다.").grid(
+                      row=2, column=0, columnspan=4, sticky="w", padx=8, pady=(2, 0))
 
         btns = ttk.Frame(root)
-        btns.pack(fill="x", padx=10, pady=4)
-        self.btn_query = ttk.Button(btns, text="재고현황 조회", command=self._on_query)
-        self.btn_query.pack(side="left", padx=4)
+        btns.pack(fill="x", padx=16, pady=(2, 6))
+        self.btn_query = ttk.Button(btns, text="🔍  재고현황 조회", style="Accent.TButton",
+                                    command=self._on_query)
+        self.btn_query.pack(side="left")
         self.btn_inv_csv = ttk.Button(btns, text="CSV 내보내기",
                                       command=lambda: export_rows_csv(self._inventory_display, "inventory.csv"),
                                       state="disabled")
-        self.btn_inv_csv.pack(side="left", padx=4)
+        self.btn_inv_csv.pack(side="left", padx=8)
         self.status = tk.StringVar(value="대기 중")
-        ttk.Label(btns, textvariable=self.status, foreground="#0a58ca").pack(side="right", padx=8)
+        ttk.Label(btns, textvariable=self.status, style="Status.TLabel").pack(side="right")
 
-        tf = ttk.Frame(root)
-        tf.pack(fill="both", expand=True, padx=10, pady=(4, 10))
+        tf = tk.Frame(root, bg=BORDER)   # 1px 테두리 느낌의 카드
+        tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
         self.tree_inv = ttk.Treeview(tf, show="headings")
         ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_inv.yview)
         xsb = ttk.Scrollbar(tf, orient="horizontal", command=self.tree_inv.xview)
         self.tree_inv.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
-        self.tree_inv.grid(row=0, column=0, sticky="nsew")
+        self.tree_inv.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         ysb.grid(row=0, column=1, sticky="ns")
         xsb.grid(row=1, column=0, sticky="ew")
         tf.rowconfigure(0, weight=1)
@@ -273,37 +367,37 @@ class App(tk.Tk):
         pad = {"padx": 6, "pady": 4}
         root = self.tab_cmp
 
-        top = ttk.LabelFrame(root, text="Wizfasta 판매상품 데이터")
-        top.pack(fill="x", padx=10, pady=(10, 4))
+        top = ttk.LabelFrame(root, text=" Wizfasta 판매상품 데이터 ")
+        top.pack(fill="x", padx=16, pady=(12, 6), ipady=4)
         self.var_wiz_path = tk.StringVar(value=self._default_wiz_path())
         ttk.Label(top, text="JSON 파일").grid(row=0, column=0, sticky="e", **pad)
         ttk.Entry(top, textvariable=self.var_wiz_path, width=70).grid(row=0, column=1, sticky="w", **pad)
         ttk.Button(top, text="찾아보기", command=self._browse_wiz).grid(row=0, column=2, **pad)
         ttk.Label(
-            top,
+            top, style="Muted.TLabel",
             text="※ Wizfasta [상품관리>판매상품등록]에서 wizfasta_extract.js 로 추출한 파일을 지정하세요.",
-            foreground="#666",
         ).grid(row=1, column=0, columnspan=3, sticky="w", **pad)
 
         btns = ttk.Frame(root)
-        btns.pack(fill="x", padx=10, pady=4)
-        ttk.Button(btns, text="가격비교 실행", command=self._on_compare).pack(side="left", padx=4)
+        btns.pack(fill="x", padx=16, pady=(2, 6))
+        ttk.Button(btns, text="가격비교 실행", style="Accent.TButton",
+                   command=self._on_compare).pack(side="left")
         self.btn_cmp_csv = ttk.Button(btns, text="비교결과 CSV 내보내기",
                                       command=lambda: export_rows_csv(self._compare_rows, "price_compare.csv"),
                                       state="disabled")
-        self.btn_cmp_csv.pack(side="left", padx=4)
+        self.btn_cmp_csv.pack(side="left", padx=8)
         self.cmp_status = tk.StringVar(
-            value="먼저 ①탭에서 재고현황을 조회한 뒤, Wizfasta JSON 을 지정하고 실행하세요."
+            value="먼저 재고현황 탭에서 조회한 뒤, Wizfasta JSON 을 지정하고 실행하세요."
         )
-        ttk.Label(btns, textvariable=self.cmp_status, foreground="#0a58ca").pack(side="right", padx=8)
+        ttk.Label(btns, textvariable=self.cmp_status, style="Status.TLabel").pack(side="right")
 
-        tf = ttk.Frame(root)
-        tf.pack(fill="both", expand=True, padx=10, pady=(4, 10))
+        tf = tk.Frame(root, bg=BORDER)
+        tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
         self.tree_cmp = ttk.Treeview(tf, show="headings")
         ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_cmp.yview)
         xsb = ttk.Scrollbar(tf, orient="horizontal", command=self.tree_cmp.xview)
         self.tree_cmp.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
-        self.tree_cmp.grid(row=0, column=0, sticky="nsew")
+        self.tree_cmp.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         ysb.grid(row=0, column=1, sticky="ns")
         xsb.grid(row=1, column=0, sticky="ew")
         tf.rowconfigure(0, weight=1)
@@ -409,6 +503,7 @@ class App(tk.Tk):
         if not cfg["COM_CODE"] or not cfg["USER_ID"] or not cfg["API_CERT_KEY"]:
             messagebox.showwarning("입력 필요", "회사코드 / 사용자ID / API 인증키를 모두 입력하세요.")
             return
+        self._model_filter = self.var_model.get().strip()   # 모델명 필터(메인 스레드에서 캡처)
         self.btn_query.configure(state="disabled")
         self.btn_inv_csv.configure(state="disabled")
         self.status.set("조회 중...")
@@ -469,6 +564,10 @@ class App(tk.Tk):
                 note = f"입고단가 미연동(품목 조회 불가): {exc}"
 
         display = cmp.build_inventory_display(rows, product_rows)
+        # 모델명 부분일치 필터(클라이언트측)
+        mf = getattr(self, "_model_filter", "").strip().lower()
+        if mf:
+            display = [d for d in display if mf in str(d.get("모델명", "")).lower()]
         display = cmp.add_subtotals(display)   # 동일 품목코드 그룹 하단에 중간합계(평균 단가)
         self.after(0, self._query_done, data, rows, display, note)
 
