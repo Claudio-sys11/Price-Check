@@ -65,16 +65,13 @@ def build_inventory_display(
 ) -> list[dict[str, Any]]:
     """재고현황 행을 표시용으로 변환한다.
 
-    품목 마스터(product_rows)가 있으면 품목코드로 품목명을 찾아
-    브랜드/상품코드/사이즈/입고일자 4개 컬럼으로 분해해 앞쪽에 배치한다.
-    품목명을 못 구하면 해당 컬럼은 빈 값으로 둔다.
-
-    재고현황 응답에 있는 항목(창고/품목명/규격 등)을 가능한 한 모두 연동한다.
-    품목명(PROD_DES)이 응답에 있으면(ByLocation 등) 그것을, 없으면 품목 마스터로 보완한다.
+    품목명(PROD_DES)을 브랜드/모델명/사이즈/입고일자로 분해(컬럼엔 분해값만, 품목명·규격은 미표시).
+    품목 마스터(product_rows)에서 입고단가(IN_PRICE)를 가져와 결합하고,
+    총단가 = 입고단가 × 재고수량 을 계산한다.
 
     출력 컬럼(있는 것만):
-      브랜드 | 모델명 | 사이즈 | 입고일자 | 품목코드 | 품목명 | 규격 | 창고코드 | 창고명 | 재고수량
-    재고수량은 소수점을 제외한 정수로 표현한다.
+      브랜드 | 모델명 | 사이즈 | 입고일자 | 품목코드 | 창고코드 | 창고명 | 재고수량 | 입고단가 | 총단가
+    재고수량·금액은 소수점을 제외한 정수로 표현한다.
     """
     if not inventory_rows:
         return []
@@ -84,42 +81,91 @@ def build_inventory_display(
 
     sample = inventory_rows[0]
     name_f = _pick_field(sample, _NAME_CANDIDATES)       # PROD_DES (품목명, 인라인)
-    size_f = _pick_field(sample, _SIZE_CANDIDATES)       # 규격
     wh_f = _pick_field(sample, _WH_CANDIDATES)           # 창고코드
     whn_f = _pick_field(sample, _WHNAME_CANDIDATES)      # 창고명
 
-    # 품목명이 재고 응답에 없으면 품목 마스터로 보완
+    # 품목 마스터: 품목코드 -> (품목명 보완, 입고단가)
     name_map: dict[str, str] = {}
-    if not name_f and product_rows:
+    price_map: dict[str, float] = {}
+    if product_rows:
         pfmap = product_field_map or detect_product_fields(product_rows)
         pcode, pname = pfmap["품목코드"], pfmap["품목명"]
-        if pcode and pname:
-            for pr in product_rows:
-                c = str(pr.get(pcode, "")).strip()
-                if c:
-                    name_map[c] = str(pr.get(pname, "") or "")
+        pprice = _pick_field(product_rows[0], _PRICE_CANDIDATES)   # IN_PRICE
+        for pr in product_rows:
+            c = str(pr.get(pcode, "")).strip() if pcode else ""
+            if not c:
+                continue
+            if pname and c not in name_map:
+                name_map[c] = str(pr.get(pname, "") or "")
+            if pprice and c not in price_map:
+                price_map[c] = _to_number(pr.get(pprice))
 
     out = []
     for r in inventory_rows:
         code = str(r.get(code_f, "")).strip() if code_f else ""
         name = str(r.get(name_f, "") or "") if name_f else name_map.get(code, "")
         parsed = parse_product_name(name)
+        qty = int(_to_number(r.get(qty_f))) if qty_f else 0
+        price = int(round(price_map.get(code, 0)))   # 입고단가(정수)
+        total = price * qty                          # 총단가
         row: dict[str, Any] = {
             "브랜드": parsed["브랜드"],
             "모델명": parsed["모델명"],
             "사이즈": parsed["사이즈"],
             "입고일자": parsed["입고일자"],
             "품목코드": code,
-            "품목명": name,
         }
-        if size_f:
-            row["규격"] = str(r.get(size_f, "") or "")
         if wh_f:
             row["창고코드"] = str(r.get(wh_f, "") or "")
         if whn_f:
             row["창고명"] = str(r.get(whn_f, "") or "")
-        row["재고수량"] = int(_to_number(r.get(qty_f))) if qty_f else ""
+        row["재고수량"] = qty
+        row["입고단가"] = price
+        row["총단가"] = total
         out.append(row)
+    return out
+
+
+def add_subtotals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """동일 품목코드 그룹마다 하단에 중간합계(평균 단가) 행을 삽입한다.
+
+    중간합계 행: 재고수량 합계, 총단가 합계, 평균 단가(= 총단가합 / 수량합, 수량합이 0이면 단가 평균).
+    내부 표식 키 '_subtotal'=True 로 표시(표시 컬럼에서는 제외).
+    """
+    if not rows:
+        return rows
+    cols = [k for k in rows[0].keys() if not k.startswith("_")]
+
+    groups: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for r in rows:
+        c = str(r.get("품목코드", ""))
+        if c not in groups:
+            groups[c] = []
+            order.append(c)
+        groups[c].append(r)
+
+    out: list[dict[str, Any]] = []
+    for c in order:
+        g = groups[c]
+        out.extend(g)
+        sum_qty = sum(_to_number(r.get("재고수량")) for r in g)
+        sum_total = sum(_to_number(r.get("총단가")) for r in g)
+        prices = [_to_number(r.get("입고단가")) for r in g]
+        if sum_qty != 0:
+            avg = sum_total / sum_qty
+        elif prices:
+            avg = sum(prices) / len(prices)
+        else:
+            avg = 0
+        sub = {k: "" for k in cols}
+        label_col = "창고명" if "창고명" in sub else "품목코드"
+        sub[label_col] = "▸ 소계/평균"
+        sub["재고수량"] = int(sum_qty)
+        sub["입고단가"] = int(round(avg))    # 평균 단가
+        sub["총단가"] = int(round(sum_total))
+        sub["_subtotal"] = True
+        out.append(sub)
     return out
 
 

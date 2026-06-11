@@ -42,14 +42,16 @@ def fill_tree(tree: ttk.Treeview, rows: list[dict]) -> None:
     headers: list[str] = []
     for r in rows:
         for k in r.keys():
-            if k not in headers:
+            if not k.startswith("_") and k not in headers:
                 headers.append(k)
     tree["columns"] = headers
     for h in headers:
         tree.heading(h, text=h, anchor="center")
-        tree.column(h, width=120, anchor="center", stretch=False)
+        tree.column(h, width=110, anchor="center", stretch=False)
+    tree.tag_configure("subtotal", background="#e7eefc", font=("", 9, "bold"))
     for r in rows:
-        tree.insert("", "end", values=[r.get(h, "") for h in headers])
+        tags = ("subtotal",) if r.get("_subtotal") else ()
+        tree.insert("", "end", values=[r.get(h, "") for h in headers], tags=tags)
 
 
 def export_rows_csv(rows: list[dict], initial: str = "export.csv") -> None:
@@ -66,11 +68,11 @@ def export_rows_csv(rows: list[dict], initial: str = "export.csv") -> None:
     headers: list[str] = []
     for r in rows:
         for k in r.keys():
-            if k not in headers:
+            if not k.startswith("_") and k not in headers:
                 headers.append(k)
     try:
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=headers)
+            w = csv.DictWriter(f, fieldnames=headers, extrasaction="ignore")
             w.writeheader()
             w.writerows(rows)
     except OSError as exc:
@@ -441,10 +443,9 @@ class App(tk.Tk):
             self.after(0, self._query_failed, f"예기치 못한 오류: {exc}")
             return
 
-        product_rows: list[dict] = []
         note = ""
         try:
-            # 1순위: 창고별 재고현황 (창고코드/창고명/품목명/규격/재고 모두 포함)
+            # 1순위: 창고별 재고현황 (창고코드/창고명/품목명/재고 포함)
             data = client.get_inventory(endpoint=self.RICH_EP, payload=payload)
             rows = cmp.extract_ecount_rows(data)
         except EcountApiError as exc:
@@ -456,13 +457,19 @@ class App(tk.Tk):
             except EcountApiError as exc2:
                 self.after(0, self._query_failed, str(exc2))
                 return
-            # 기본 엔드포인트엔 품목명이 없으니 품목 마스터로 보완 시도
-            try:
-                product_rows = cmp.extract_ecount_rows(client.get_products())
-            except EcountApiError:
-                pass
+
+        # 입고단가(IN_PRICE)·품목명 보완을 위해 품목 마스터 조회 (항상)
+        product_rows: list[dict] = []
+        try:
+            product_rows = cmp.extract_ecount_rows(client.get_products())
+        except EcountApiError as exc:
+            if note:
+                note += f" / 품목 조회 불가: {exc}"
+            else:
+                note = f"입고단가 미연동(품목 조회 불가): {exc}"
 
         display = cmp.build_inventory_display(rows, product_rows)
+        display = cmp.add_subtotals(display)   # 동일 품목코드 그룹 하단에 중간합계(평균 단가)
         self.after(0, self._query_done, data, rows, display, note)
 
     def _query_failed(self, msg: str) -> None:
@@ -487,15 +494,21 @@ class App(tk.Tk):
             )
             return
 
-        # 품목명을 가져왔는지(=브랜드/모델명/사이즈/입고일자 채워졌는지) 확인
-        has_name = any(d.get("품목명") for d in display)
-        has_wh = any("창고코드" in d for d in display)
+        # 실제 데이터 행(소계 제외)
+        data_rows = [d for d in display if not d.get("_subtotal")]
+        has_name = any(d.get("브랜드") for d in data_rows)   # 품목명 분해 성공 여부
+        has_price = any(d.get("입고단가") for d in data_rows)  # 입고단가 연동 여부
+        has_wh = any("창고코드" in d for d in data_rows)
         self.btn_inv_csv.configure(state="normal")
-        if has_name:
-            extra = " + 창고별" if has_wh else ""
-            self.status.set(f"완료 — {len(rows)}건 (품목명 분해{extra} 적용)")
+        if has_name or has_price:
+            parts = []
+            if has_name:
+                parts.append("품목명 분해" + (" + 창고별" if has_wh else ""))
+            if has_price:
+                parts.append("입고단가/총단가")
+            self.status.set(f"완료 — {len(rows)}건 ({', '.join(parts)} 적용, 소계 포함)")
         else:
-            self.status.set(f"완료 — {len(rows)}건 (품목명 미적용: 창고별/품목 조회 API 권한 필요)")
+            self.status.set(f"완료 — {len(rows)}건 (품목명/입고단가 미적용: 창고별/품목 조회 API 권한 필요)")
             if product_note:
                 messagebox.showwarning(
                     "재고 항목 일부 미연동",
