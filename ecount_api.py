@@ -18,9 +18,22 @@ inventory.payload 를 조정하세요. 이 클라이언트는 응답 원문(raw 
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import requests
+
+
+def _num(v: Any) -> float:
+    if v is None or v == "":
+        return 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = re.sub(r"[^0-9.\-]", "", str(v))
+    try:
+        return float(s) if s not in ("", "-", ".") else 0.0
+    except ValueError:
+        return 0.0
 
 
 class EcountApiError(Exception):
@@ -167,6 +180,60 @@ class EcountClient:
                 f"품목 조회 실패(Status={status}): {self._error_message(data)}"
             )
         return data
+
+    # ---- 5) 품목코드별 입고단가 조회 (품목등록 IN_PRICE, 개별 매칭) -------
+    def get_prices(self, codes, progress=None, per_session: int = 2,
+                   should_stop=None) -> dict[str, float]:
+        """품목코드 목록 각각에 대해 품목등록(GetBasicProductsList, PROD_CD 지정)의
+        입고단가(IN_PRICE)를 조회해 {품목코드: 입고단가} 로 반환한다.
+
+        EcountERP 제약:
+          - 빈 조건 조회는 첫 10000건만 주고 페이지네이션이 없어 재고 품목을 못 덮음.
+          - PROD_CD 지정 조회는 한 세션당 약 2건만 허용되고 이후 HTTP 412(rate limit).
+          - 재로그인(새 세션) 하면 제한이 리셋됨.
+        → per_session(기본 2)건마다 새 세션으로 재로그인하며 순차 조회한다.
+
+        progress(done, total) 콜백, should_stop() 가 True면 중단.
+        """
+        if not self.zone:
+            self.get_zone()
+        uniq = list(dict.fromkeys(str(c).strip() for c in codes if str(c).strip()))
+        total = len(uniq)
+        result: dict[str, float] = {}
+        done = 0
+
+        for i in range(0, total, per_session):
+            if should_stop and should_stop():
+                break
+            batch = uniq[i:i + per_session]
+            # 새 세션으로 재로그인(세션당 호출 제한 리셋)
+            self._session = requests.Session()
+            self.session_id = None
+            try:
+                self.login()
+            except EcountApiError:
+                # 로그인 일시 실패 시 이 배치는 건너뛰고 계속
+                done += len(batch)
+                if progress:
+                    progress(done, total)
+                continue
+            url = (
+                f"{self._base_url(with_zone=True)}"
+                f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={self.session_id}"
+            )
+            for code in batch:
+                try:
+                    resp = self._session.post(url, json={"PROD_CD": code}, timeout=30)
+                    if resp.status_code == 200:
+                        rows = ((resp.json().get("Data") or {}).get("Result")) or []
+                        if rows:
+                            result[code] = _num(rows[0].get("IN_PRICE"))
+                except (requests.RequestException, json.JSONDecodeError, ValueError):
+                    pass
+                done += 1
+                if progress:
+                    progress(done, total)
+        return result
 
     @staticmethod
     def _error_message(data: dict[str, Any]) -> str:

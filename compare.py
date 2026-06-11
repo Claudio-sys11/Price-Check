@@ -62,6 +62,7 @@ def build_inventory_display(
     product_rows: list[dict[str, Any]] | None = None,
     field_map: dict[str, str | None] | None = None,
     product_field_map: dict[str, str | None] | None = None,
+    price_map: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """재고현황 행을 표시용으로 변환한다.
 
@@ -84,9 +85,10 @@ def build_inventory_display(
     wh_f = _pick_field(sample, _WH_CANDIDATES)           # 창고코드
     whn_f = _pick_field(sample, _WHNAME_CANDIDATES)      # 창고명
 
-    # 품목 마스터: 품목코드 -> (품목명 보완, 입고단가)
+    # 입고단가 맵(price_map): 품목코드별 입고단가를 외부에서 직접 주입(우선) 하거나
+    # 품목 마스터(product_rows)에서 추출. 품목명 보완용 name_map 도 함께 구성.
     name_map: dict[str, str] = {}
-    price_map: dict[str, float] = {}
+    pmap: dict[str, float] = dict(price_map) if price_map else {}
     if product_rows:
         pfmap = product_field_map or detect_product_fields(product_rows)
         pcode, pname = pfmap["품목코드"], pfmap["품목명"]
@@ -97,8 +99,8 @@ def build_inventory_display(
                 continue
             if pname and c not in name_map:
                 name_map[c] = str(pr.get(pname, "") or "")
-            if pprice and c not in price_map:
-                price_map[c] = _to_number(pr.get(pprice))
+            if pprice and c not in pmap:
+                pmap[c] = _to_number(pr.get(pprice))
 
     out = []
     for r in inventory_rows:
@@ -106,7 +108,7 @@ def build_inventory_display(
         name = str(r.get(name_f, "") or "") if name_f else name_map.get(code, "")
         parsed = parse_product_name(name)
         qty = int(_to_number(r.get(qty_f))) if qty_f else 0
-        price = int(round(price_map.get(code, 0)))   # 입고단가(정수)
+        price = int(round(pmap.get(code, 0)))   # 입고단가(정수)
         total = price * qty                          # 총단가
         row: dict[str, Any] = {
             "브랜드": parsed["브랜드"],

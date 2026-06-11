@@ -50,6 +50,23 @@ def app_data_dir() -> str:
 
 
 CONFIG_PATH = os.path.join(app_data_dir(), "config.json")
+PRICE_CACHE_PATH = os.path.join(app_data_dir(), "price_cache.json")
+
+
+def load_price_cache() -> dict:
+    try:
+        with open(PRICE_CACHE_PATH, encoding="utf-8") as f:
+            return json.load(f) or {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_price_cache(cache: dict) -> None:
+    try:
+        with open(PRICE_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except OSError:
+        pass
 
 
 def _sort_key(value) -> tuple:
@@ -167,6 +184,7 @@ class App(tk.Tk):
         self._inv_status_suffix: str = ""
         self._sort_col: str | None = None    # 정렬 기준 열(헤더 클릭)
         self._sort_desc: bool = False        # 내림차순 여부
+        self._query_seq: int = 0             # 조회 시퀀스(백그라운드 가격조회 취소용)
         self._inventory_raw: dict | None = None
         self._compare_rows: list[dict] = []
         self._update_url: str = ""
@@ -269,6 +287,7 @@ class App(tk.Tk):
         settings_menu = tk.Menu(menubar, tearoff=0, background="white", foreground=TEXT,
                                 activebackground=ACCENT, activeforeground="white")
         settings_menu.add_command(label="인증 정보 설정...", command=self._open_settings)
+        settings_menu.add_command(label="입고단가 캐시 비우기(갱신)", command=self._clear_price_cache)
         settings_menu.add_separator()
         settings_menu.add_command(label="종료", command=self.destroy)
         menubar.add_cascade(label="설정", menu=settings_menu)
@@ -317,6 +336,10 @@ class App(tk.Tk):
     def _save_settings(self, win: tk.Toplevel) -> None:
         self._save_config()
         win.destroy()
+
+    def _clear_price_cache(self) -> None:
+        save_price_cache({})
+        messagebox.showinfo("입고단가 캐시", "입고단가 캐시를 비웠습니다.\n다음 조회 때 품목등록에서 다시 받아옵니다.")
 
     # ================= 자동 업데이트 =================
     def _start_update_check(self) -> None:
@@ -567,6 +590,7 @@ class App(tk.Tk):
         if not cfg["COM_CODE"] or not cfg["USER_ID"] or not cfg["API_CERT_KEY"]:
             messagebox.showwarning("입력 필요", "회사코드 / 사용자ID / API 인증키를 모두 입력하세요.")
             return
+        self._query_seq = getattr(self, "_query_seq", 0) + 1  # 새 조회 → 이전 백그라운드 가격조회 중단
         self.btn_query.configure(state="disabled")
         self.btn_inv_csv.configure(state="disabled")
         self.status.set("조회 중...")
@@ -575,13 +599,13 @@ class App(tk.Tk):
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
         except OSError:
             pass
-        threading.Thread(target=self._do_query, args=(cfg,), daemon=True).start()
+        threading.Thread(target=self._do_query, args=(cfg, self._query_seq), daemon=True).start()
 
     # 재고현황 엔드포인트: 풍부한 ByLocation(창고/품목명/규격 포함) 우선, 권한 없으면 기본으로 폴백
     RICH_EP = "/OAPI/V2/InventoryBalance/GetListInventoryBalanceStatusByLocation"
     BASIC_EP = "/OAPI/V2/InventoryBalance/GetListInventoryBalanceStatus"
 
-    def _do_query(self, cfg: dict) -> None:
+    def _do_query(self, cfg: dict, my_seq: int = 0) -> None:
         from datetime import date
         try:
             client = EcountClient(
@@ -616,19 +640,35 @@ class App(tk.Tk):
                 self.after(0, self._query_failed, str(exc2))
                 return
 
-        # 입고단가(IN_PRICE)·품목명 보완을 위해 품목 마스터 조회 (항상)
-        product_rows: list[dict] = []
-        try:
-            product_rows = cmp.extract_ecount_rows(client.get_products())
-        except EcountApiError as exc:
-            if note:
-                note += f" / 품목 조회 불가: {exc}"
-            else:
-                note = f"입고단가 미연동(품목 조회 불가): {exc}"
+        # 입고단가: 품목코드별로 품목등록(IN_PRICE)을 개별 조회해 매칭(캐시 활용)
+        code_f = cmp.detect_ecount_fields(rows).get("품목코드") or "PROD_CD"
+        inv_codes = list(dict.fromkeys(
+            str(r.get(code_f, "")).strip() for r in rows if str(r.get(code_f, "")).strip()))
+        cache = load_price_cache()
 
-        # 필터 전 전체 데이터 행(소계/정렬 없이). 필터/정렬/소계는 표시 단계에서 처리.
-        all_display = cmp.build_inventory_display(rows, product_rows)
+        # 1) 우선 캐시에 있는 입고단가로 즉시 표시
+        price_map = {c: cache[c] for c in inv_codes if c in cache}
+        all_display = cmp.build_inventory_display(rows, price_map=price_map)
         self.after(0, self._query_done, data, rows, all_display, note)
+
+        # 2) 누락된 품목코드 입고단가를 백그라운드로 받아 채우고 자동 갱신
+        missing = [c for c in inv_codes if c not in cache]
+        if missing:
+            def prog(d, t):
+                self.after(0, lambda d=d, t=t: self.status.set(
+                    f"입고단가 매칭 중… {d}/{t} (완료 후 자동 갱신)"))
+            try:
+                fetched = client.get_prices(
+                    missing, progress=prog,
+                    should_stop=lambda: getattr(self, "_query_seq", 0) != my_seq)
+            except EcountApiError:
+                fetched = {}
+            if fetched and getattr(self, "_query_seq", 0) == my_seq:
+                cache.update(fetched)
+                save_price_cache(cache)
+                full_map = {c: cache[c] for c in inv_codes if c in cache}
+                new_all = cmp.build_inventory_display(rows, price_map=full_map)
+                self.after(0, self._prices_updated, rows, new_all, len(fetched))
 
     def _query_failed(self, msg: str) -> None:
         self.btn_query.configure(state="normal")
@@ -736,6 +776,13 @@ class App(tk.Tk):
         else:
             self._sort_col = col
             self._sort_desc = False
+        self._render_inventory()
+
+    def _prices_updated(self, rows: list[dict], new_all: list[dict], n_fetched: int) -> None:
+        """백그라운드 입고단가 매칭 완료 → 전체 데이터 교체 후 현재 필터/정렬로 재표시."""
+        if rows is not self._inventory_rows:   # 그 사이 새 조회가 있었으면 무시
+            return
+        self._inventory_display_all = new_all
         self._render_inventory()
 
 
