@@ -156,8 +156,9 @@ def build_cost_comparison(
     모델명이 다른 쪽에 포함되면 같은 상품으로 인식한다(브랜드/색상 접두가 붙는 Wizfasta
     모델명 대응). 오인식 방지를 위해 포함되는 쪽 길이가 5자 이상일 때만 매칭한다.
 
-    반환: 브랜드 | 모델명 | Wiz_원가 | Ecount_평균원가 | 원가-평균원가차이
-          | Wiz_재고 | Ecount_재고 | 재고차이 | 매칭
+    반환: 브랜드 | 모델명 | 원가(W) | 평균원가(ERP) | 차이
+          | 파스타재고 | 실재고(ERP) | 재고차이 | 매칭 | 비고
+    ERP 실재고가 없는(매칭 X 또는 재고 0) 행은 비고="미입고 상품"으로 표기한다.
     """
     # EcountERP: 정규화 모델명별 그룹(가중 평균원가 + 재고합)
     ec_groups: dict[str, dict] = {}       # norm -> {amt, qty, prices}
@@ -215,32 +216,34 @@ def build_cost_comparison(
         wiz_qty = _to_number(w.get("재고"))
         qty_diff = (wiz_qty - ec_qty) if (ec_qty is not None) else None
 
-        # 정렬 우선순위 + 행 색상 태그
-        #   0: 매칭 O + 단가차이 있음  (상단)
-        #   1: 매칭 X (미매칭)          (중간)
-        #   2: 매칭 O + 단가차이 없음   (하단)
-        if not matched:
-            prio, tag = 1, "unmatched"
+        # 분류(ERP 실재고 없음=미입고 상품)
+        #   0: 단가차이(매칭 O·재고>0·차이 있음)  (상단)
+        #   1: 미입고(ERP 실재고 없음 또는 0)      (중간)
+        #   2: 단가일치(매칭 O·재고>0·차이 없음)   (하단)
+        no_stock = (not matched) or (ec_qty is None) or (int(round(ec_qty)) == 0)
+        if no_stock:
+            prio, tag, bigo = 1, "nostock", "미입고 상품"
         elif has_diff:
-            prio, tag = 0, "diff"
+            prio, tag, bigo = 0, "diff", ""
         else:
-            prio, tag = 2, "same"
+            prio, tag, bigo = 2, "same", ""
 
         rows_raw.append({
             "_prio": prio,
             "_tag": tag,
             "브랜드": w.get("브랜드", ""),
             "모델명": w.get("모델명", ""),
-            "Wiz_원가": f"{int(round(wiz_cost)):,}",
-            "Ecount_평균원가": (f"{int(round(ec_price)):,}" if matched else ""),
-            "원가-평균원가차이": (f"{int(round(diff)):,}" if diff is not None else ""),
-            "Wiz_재고": f"{int(round(wiz_qty)):,}",
-            "Ecount_재고": (f"{int(round(ec_qty)):,}" if ec_qty is not None else ""),
+            "원가(W)": f"{int(round(wiz_cost)):,}",
+            "평균원가(ERP)": (f"{int(round(ec_price)):,}" if matched else ""),
+            "차이": (f"{int(round(diff)):,}" if diff is not None else ""),
+            "파스타재고": f"{int(round(wiz_qty)):,}",
+            "실재고(ERP)": (f"{int(round(ec_qty)):,}" if ec_qty is not None else ""),
             "재고차이": (f"{int(round(qty_diff)):,}" if qty_diff is not None else ""),
             "매칭": "O" if matched else "X",
+            "비고": bigo,
         })
 
-    # 우선순위(차이>미매칭>동일) → 브랜드 → 모델명 순 정렬
+    # 우선순위(차이>미입고>일치) → 브랜드 → 모델명 순 정렬
     rows_raw.sort(key=lambda r: (r["_prio"],
                                  str(r["브랜드"] or "").upper(),
                                  str(r["모델명"] or "").upper()))

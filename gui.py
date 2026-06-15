@@ -82,8 +82,9 @@ DIFF_FG = "#b91c1c"
 UNMATCH_BG = "#eef1f4"         # 가격비교: 미매칭 행
 UNMATCH_FG = "#6b7280"
 
-MONEY_COLS = {"입고단가", "총단가", "Wiz_원가", "Ecount_평균원가", "원가-평균원가차이",
-              "Wiz_재고", "Ecount_재고", "재고차이"}  # 우측정렬(금액·수량) 컬럼
+MONEY_COLS = {"입고단가", "총단가",
+              "원가(W)", "평균원가(ERP)", "차이",
+              "파스타재고", "실재고(ERP)", "재고차이"}  # 우측정렬(금액·수량) 컬럼
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # 실시간 활동 스피너
 
@@ -1402,9 +1403,9 @@ class App(tk.Tk):
         chip_box.pack(side="right")
         self.chip_total = StatChip(chip_box, "전체 (Wiz)", fill="#e0f7f1", fg="#0f766e")
         self.chip_diff = StatChip(chip_box, "단가차이", fill=DIFF_BG, fg=DIFF_FG)
-        self.chip_unmatch = StatChip(chip_box, "미매칭", fill=UNMATCH_BG, fg="#4b5563")
+        self.chip_nostock = StatChip(chip_box, "미입고", fill="#fdeccb", fg="#8a5a0a")
         self.chip_same = StatChip(chip_box, "단가일치", fill="#d7f5ed", fg="#0d9488")
-        for c in (self.chip_total, self.chip_diff, self.chip_unmatch, self.chip_same):
+        for c in (self.chip_total, self.chip_diff, self.chip_nostock, self.chip_same):
             c.pack(side="left", padx=(10, 0))
 
         # 검색 필터(브랜드·모델명) — 비교 결과를 부분일치로 즉시 필터
@@ -1446,6 +1447,15 @@ class App(tk.Tk):
             "right_click_popup_menu", "rc_select")
         self.sheet_cmp.pack(fill="both", expand=True, padx=1, pady=1)
         self.sheet_cmp.extra_bindings("double_click_cell", self._on_cmp_sheet_double)
+        # 깔끔한 스타일: 행 번호 숨김, 적절한 행/머리글 높이
+        try:
+            self.sheet_cmp.hide("row_index")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.sheet_cmp.set_options(default_row_height=32, default_header_height="1")
+        except Exception:  # noqa: BLE001
+            pass
 
     def _on_cmp_sheet_double(self, event=None) -> None:
         """원가비교 시트 더블클릭: 모델명 셀이면 재고현황 탭으로 이동·조회."""
@@ -1474,8 +1484,8 @@ class App(tk.Tk):
                 if not k.startswith("_") and k not in headers:
                     headers.append(k)
         if not headers:
-            headers = ["브랜드", "모델명", "Wiz_원가", "Ecount_평균원가", "원가-평균원가차이",
-                       "Wiz_재고", "Ecount_재고", "재고차이", "매칭"]
+            headers = ["브랜드", "모델명", "원가(W)", "평균원가(ERP)", "차이",
+                       "파스타재고", "실재고(ERP)", "재고차이", "매칭", "비고"]
         self._cmp_headers = headers
         data = [[r.get(h, "") for h in headers] for r in rows]
 
@@ -1490,8 +1500,8 @@ class App(tk.Tk):
             tag = r.get("_tag")
             if tag == "diff":
                 sh.highlight_rows([i], bg=DIFF_BG, fg=DIFF_FG, redraw=False)
-            elif tag == "unmatched":
-                sh.highlight_rows([i], bg=UNMATCH_BG, fg=UNMATCH_FG, redraw=False)
+            elif tag == "nostock":
+                sh.highlight_rows([i], bg="#fff4e0", fg="#8a5a0a", redraw=False)
         # 금액·수량 컬럼 우측정렬
         money_cols = [ci for ci, h in enumerate(headers) if h in MONEY_COLS]
         if money_cols:
@@ -1790,11 +1800,11 @@ class App(tk.Tk):
 
         total = len(rows)
         n_diff = sum(1 for r in rows if r.get("_tag") == "diff")
-        n_unmatch = sum(1 for r in rows if r.get("_tag") == "unmatched")
+        n_nostock = sum(1 for r in rows if r.get("_tag") == "nostock")
         n_same = sum(1 for r in rows if r.get("_tag") == "same")
         self.chip_total.set_value(f"{total:,}")
         self.chip_diff.set_value(f"{n_diff:,}")
-        self.chip_unmatch.set_value(f"{n_unmatch:,}")
+        self.chip_nostock.set_value(f"{n_nostock:,}")
         self.chip_same.set_value(f"{n_same:,}")
 
         full = len(allrows)
