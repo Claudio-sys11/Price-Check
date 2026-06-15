@@ -6,8 +6,8 @@
 ;               자동으로 silent 언인스톨한 뒤 새로 설치한다(이전 버전 잔존 방지).
 
 #define MyAppId "8F3C2A91-7B4D-4E26-9A1F-EC0A17E5C001"
-#define MyAppName "EcountERP 재고현황 조회"
-#define MyAppVersion "1.0.27"
+#define MyAppName "실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교"
+#define MyAppVersion "1.0.28"
 #define MyAppPublisher "EcountInventory"
 #define MyAppExeName "EcountInventory.exe"
 
@@ -21,7 +21,7 @@ AppVerName={#MyAppName} {#MyAppVersion}
 VersionInfoVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\EcountInventory
-DefaultGroupName=EcountERP 재고현황
+DefaultGroupName=실시간 재고 현황 및 평균 원가 비교
 DisableProgramGroupPage=yes
 OutputDir=installer
 OutputBaseFilename=EcountInventory_Setup_v{#MyAppVersion}

@@ -389,37 +389,83 @@ class StatChip(tk.Canvas):
                          fill=self._fg, font=(FONT, 9, "bold"))
 
 
-def export_rows_csv(rows: list[dict], initial: str = "export.csv") -> None:
-    import csv
+EXPORT_FONT_SIZE = 10   # 내보낸 엑셀의 글자 크기(pt)
+
+
+def export_rows_excel(rows: list[dict], initial: str = "export.xlsx",
+                      font_size: int = EXPORT_FONT_SIZE) -> None:
+    """조회된 항목을 엑셀(.xlsx)로 저장한다. 모든 글자에 size=font_size(기본 10) 적용.
+
+    확장자를 .csv 로 지정하면 CSV(서식 없음)로 저장한다.
+    """
     if not rows:
         messagebox.showwarning("데이터 없음", "내보낼 데이터가 없습니다.")
         return
     path = filedialog.asksaveasfilename(
-        title="CSV 저장", defaultextension=".csv",
-        filetypes=[("CSV 파일", "*.csv"), ("모든 파일", "*.*")], initialfile=initial,
+        title="엑셀로 저장", defaultextension=".xlsx",
+        filetypes=[("Excel 파일", "*.xlsx"), ("CSV 파일", "*.csv"), ("모든 파일", "*.*")],
+        initialfile=initial,
     )
     if not path:
         return
+
     headers: list[str] = []
     for r in rows:
         for k in r.keys():
             if not k.startswith("_") and k not in headers:
                 headers.append(k)
+
     try:
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=headers, extrasaction="ignore")
-            w.writeheader()
-            w.writerows(rows)
-    except OSError as exc:
+        if path.lower().endswith(".csv"):
+            import csv
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.DictWriter(f, fieldnames=headers, extrasaction="ignore")
+                w.writeheader()
+                w.writerows(rows)
+        else:
+            import openpyxl
+            from openpyxl.styles import Font, Alignment
+            from openpyxl.utils import get_column_letter
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "데이터"
+            ws.append(headers)
+            for r in rows:
+                ws.append([r.get(h, "") for h in headers])
+
+            # 글자 크기 10 적용(헤더는 굵게), 가운데 정렬
+            base = Font(name="맑은 고딕", size=font_size)
+            head = Font(name="맑은 고딕", size=font_size, bold=True)
+            center = Alignment(horizontal="center", vertical="center")
+            for ci in range(1, len(headers) + 1):
+                ws.cell(row=1, column=ci).font = head
+                ws.cell(row=1, column=ci).alignment = center
+            for ri in range(2, len(rows) + 2):
+                for ci in range(1, len(headers) + 1):
+                    ws.cell(row=ri, column=ci).font = base
+
+            # 열 너비 대략 맞춤
+            for ci, h in enumerate(headers, start=1):
+                maxlen = max([len(str(h))] + [len(str(r.get(h, ""))) for r in rows])
+                ws.column_dimensions[get_column_letter(ci)].width = min(max(maxlen + 2, 8), 50)
+
+            ws.freeze_panes = "A2"   # 머리글 고정
+            wb.save(path)
+    except Exception as exc:  # noqa: BLE001
         messagebox.showerror("저장 실패", str(exc))
         return
     messagebox.showinfo("저장 완료", f"{len(rows)}건을 저장했습니다.\n{path}")
 
 
+# 하위 호환(기존 호출명 유지)
+export_rows_csv = export_rows_excel
+
+
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title(f"EcountERP 재고현황 / Wizfasta 가격비교  v{APP_VERSION}")
+        self.title(f"실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교  v{APP_VERSION}")
         self.geometry("1120x720")
         self.minsize(940, 600)
         self.configure(bg=BG)
@@ -725,8 +771,8 @@ class App(tk.Tk):
         self.btn_query = accent_button(btns, "🔍  재고현황 조회", self._on_query)
         self.btn_query.pack(side="left")
         self.btn_inv_csv = gray_button(
-            btns, "CSV 내보내기",
-            lambda: export_rows_csv(self._inventory_display, "inventory.csv"))
+            btns, "Excel 내보내기",
+            lambda: export_rows_excel(self._inventory_display, "재고현황.xlsx"))
         self.btn_inv_csv.configure(state="disabled")
         self.btn_inv_csv.pack(side="left", padx=8)
         self.btn_sub_csv = gray_button(btns, "소계/평균만 내보내기", self._export_subtotals)
@@ -778,8 +824,8 @@ class App(tk.Tk):
         self.btn_wiz_stop.configure(state="disabled")
         self.btn_wiz_stop.pack(side="left", padx=8)
         self.btn_cmp_csv = gray_button(
-            btns, "비교결과 CSV 내보내기",
-            lambda: export_rows_csv(self._compare_rows, "price_compare.csv"))
+            btns, "비교결과 Excel 내보내기",
+            lambda: export_rows_excel(self._compare_rows, "가격비교.xlsx"))
         self.btn_cmp_csv.configure(state="disabled")
         self.btn_cmp_csv.pack(side="left", padx=8)
         self.cmp_status = tk.StringVar(
@@ -1404,7 +1450,7 @@ class App(tk.Tk):
         self._render_inventory()
 
     def _export_subtotals(self) -> None:
-        """현재 표의 소계/평균 행만 (브랜드·모델명 포함) CSV 로 내보낸다."""
+        """현재 표의 소계/평균 행만 (브랜드·모델명 포함) 엑셀로 내보낸다."""
         subs = [d for d in self._inventory_display if d.get("_subtotal")]
         if not subs:
             messagebox.showwarning("데이터 없음", "내보낼 소계가 없습니다. 먼저 재고현황을 조회하세요.")
@@ -1416,7 +1462,7 @@ class App(tk.Tk):
             "평균단가": d.get("입고단가", ""),
             "총단가": d.get("총단가", ""),
         } for d in subs]
-        export_rows_csv(rows, "subtotals.csv")
+        export_rows_excel(rows, "소계평균.xlsx")
 
     def _prices_updated(self, rows: list[dict], new_all: list[dict], n_fetched: int) -> None:
         """백그라운드 입고단가 매칭 완료 → 전체 데이터 교체 후 현재 필터/정렬로 재표시."""
