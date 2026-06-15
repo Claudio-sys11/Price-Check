@@ -418,27 +418,41 @@ def gray_button(parent, text, command, *, bg=BG, **kw):
 
 
 class StatChip(tk.Canvas):
-    """둥근 통계 칩 — 큰 숫자 + 라벨을 색상 배경에 표시(결과 수 시인성 강화)."""
+    """둥근 통계 칩 — 큰 숫자 + 라벨. command 가 있으면 클릭 가능(필터)하며,
+    선택 시 골드 테두리로 활성 표시한다."""
 
     def __init__(self, parent, label, *, bg=BG, fill="#e0f7f1", fg="#0f766e",
-                 cw=148, ch=60, radius=20):
+                 cw=148, ch=60, radius=20, command=None):
         super().__init__(parent, bg=bg, highlightthickness=0, bd=0, width=cw, height=ch)
         self._label = label
         self._fill, self._fg = fill, fg
         self._radius = radius
         self._cw, self._ch = cw, ch
         self._value = "—"
+        self._command = command
+        self._active = False
         self.bind("<Configure>", lambda e: self._draw())
+        if command:
+            self.bind("<Button-1>", lambda e: command())
+            self.bind("<Enter>", lambda e: self.configure(cursor="hand2"))
+            self.bind("<Leave>", lambda e: self.configure(cursor=""))
         self._draw()
 
     def set_value(self, value):
         self._value = str(value)
         self._draw()
 
+    def set_active(self, active):
+        self._active = bool(active)
+        self._draw()
+
     def _draw(self):
         self.delete("all")
         self.create_polygon(_round_rect_points(1, 1, self._cw - 1, self._ch - 1, self._radius),
                             fill=self._fill, outline="", smooth=True)
+        if self._active:   # 선택 표시(골드 테두리)
+            self.create_polygon(_round_rect_points(2, 2, self._cw - 2, self._ch - 2, self._radius),
+                                fill="", outline=GOLD, width=3, smooth=True)
         self.create_text(self._cw // 2, self._ch // 2 - 9, text=self._value,
                          fill=self._fg, font=(FONT, 18, "bold"))
         self.create_text(self._cw // 2, self._ch // 2 + 15, text=self._label,
@@ -1401,10 +1415,15 @@ class App(tk.Tk):
         self.cmp_summary.pack(fill="x", pady=(2, 0))
         chip_box = tk.Frame(self.cmp_summary, bg=BG)
         chip_box.pack(side="right")
-        self.chip_total = StatChip(chip_box, "전체 (Wiz)", fill="#e0f7f1", fg="#0f766e")
-        self.chip_diff = StatChip(chip_box, "단가차이", fill=DIFF_BG, fg=DIFF_FG)
-        self.chip_nostock = StatChip(chip_box, "미입고", fill="#fdeccb", fg="#8a5a0a")
-        self.chip_same = StatChip(chip_box, "단가일치", fill="#d7f5ed", fg="#0d9488")
+        self._cmp_cat = None   # 대시보드 분류 필터(None=전체)
+        self.chip_total = StatChip(chip_box, "전체 (Wiz)", fill="#e0f7f1", fg="#0f766e",
+                                   command=lambda: self._set_cmp_category(None))
+        self.chip_diff = StatChip(chip_box, "단가차이", fill=DIFF_BG, fg=DIFF_FG,
+                                  command=lambda: self._set_cmp_category("diff"))
+        self.chip_nostock = StatChip(chip_box, "미입고", fill="#fdeccb", fg="#8a5a0a",
+                                     command=lambda: self._set_cmp_category("nostock"))
+        self.chip_same = StatChip(chip_box, "단가일치", fill="#d7f5ed", fg="#0d9488",
+                                  command=lambda: self._set_cmp_category("same"))
         for c in (self.chip_total, self.chip_diff, self.chip_nostock, self.chip_same):
             c.pack(side="left", padx=(10, 0))
 
@@ -1456,6 +1475,13 @@ class App(tk.Tk):
             self.sheet_cmp.set_options(default_row_height=32, default_header_height="1")
         except Exception:  # noqa: BLE001
             pass
+        # 데이터 셀을 수직(세로) 가운데 정렬
+        for kw in ("table_vertical_alignment", "default_table_vertical_alignment",
+                   "vertical_alignment"):
+            try:
+                self.sheet_cmp.set_options(**{kw: "center"})
+            except Exception:  # noqa: BLE001
+                pass
 
     def _on_cmp_sheet_double(self, event=None) -> None:
         """원가비교 시트 더블클릭: 모델명 셀이면 재고현황 탭으로 이동·조회."""
@@ -1502,11 +1528,16 @@ class App(tk.Tk):
                 sh.highlight_rows([i], bg=DIFF_BG, fg=DIFF_FG, redraw=False)
             elif tag == "nostock":
                 sh.highlight_rows([i], bg="#fff4e0", fg="#8a5a0a", redraw=False)
-        # 금액·수량 컬럼 우측정렬
+        # 금액·수량 컬럼 우측정렬, 매칭 컬럼 가운데 정렬
         money_cols = [ci for ci, h in enumerate(headers) if h in MONEY_COLS]
         if money_cols:
             try:
                 sh.align_columns(columns=money_cols, align="e", redraw=False)
+            except Exception:  # noqa: BLE001
+                pass
+        if "매칭" in headers:
+            try:
+                sh.align_columns(columns=[headers.index("매칭")], align="center", redraw=False)
             except Exception:  # noqa: BLE001
                 pass
         # 각 칸을 머리글·내용 중 넓은 쪽에 맞춰 자동 폭 조정(전부 보이게)
@@ -1802,24 +1833,43 @@ class App(tk.Tk):
                 return False
             return True
 
-        rows = [r for r in allrows if keep(r)]
-        self._compare_rows = rows
-        self._fill_compare_sheet(rows)
+        rows_bm = [r for r in allrows if keep(r)]   # 브랜드/모델명 필터 적용
 
-        total = len(rows)
-        n_diff = sum(1 for r in rows if r.get("_tag") == "diff")
-        n_nostock = sum(1 for r in rows if r.get("_tag") == "nostock")
-        n_same = sum(1 for r in rows if r.get("_tag") == "same")
+        # 칩 수치(분류별)는 브랜드/모델명 필터 기준으로 계산
+        total = len(rows_bm)
+        n_diff = sum(1 for r in rows_bm if r.get("_tag") == "diff")
+        n_nostock = sum(1 for r in rows_bm if r.get("_tag") == "nostock")
+        n_same = sum(1 for r in rows_bm if r.get("_tag") == "same")
         self.chip_total.set_value(f"{total:,}")
         self.chip_diff.set_value(f"{n_diff:,}")
         self.chip_nostock.set_value(f"{n_nostock:,}")
         self.chip_same.set_value(f"{n_same:,}")
+        # 선택된 분류 칩 강조
+        self.chip_total.set_active(self._cmp_cat is None)
+        self.chip_diff.set_active(self._cmp_cat == "diff")
+        self.chip_nostock.set_active(self._cmp_cat == "nostock")
+        self.chip_same.set_active(self._cmp_cat == "same")
+
+        # 대시보드 분류 필터 적용 → 표 표시
+        rows = ([r for r in rows_bm if r.get("_tag") == self._cmp_cat]
+                if self._cmp_cat else rows_bm)
+        self._compare_rows = rows
+        self._fill_compare_sheet(rows)
 
         full = len(allrows)
-        if total == full:
+        catname = {"diff": "단가차이", "nostock": "미입고", "same": "단가일치"}.get(self._cmp_cat)
+        if catname:
+            self.cmp_status.set(f"[{catname}] {len(rows):,}건 / 전체 {full:,}건")
+        elif total == full:
             self.cmp_status.set(f"완료 — 총 {total:,}건")
         else:
             self.cmp_status.set(f"필터 {total:,}건 / 전체 {full:,}건")
+
+    def _set_cmp_category(self, cat) -> None:
+        """대시보드 칩 클릭 → 해당 분류로 필터(같은 칩 다시 누르면 전체로 토글)."""
+        self._cmp_cat = None if (cat is not None and self._cmp_cat == cat) else cat
+        if getattr(self, "_compare_rows_all", []):
+            self._render_compare()
 
     def _on_cmp_filter_change(self, event=None) -> None:
         if getattr(self, "_compare_rows_all", []):
@@ -1828,6 +1878,7 @@ class App(tk.Tk):
     def _clear_cmp_filter(self) -> None:
         self.var_cmp_brand.set("")
         self.var_cmp_model.set("")
+        self._cmp_cat = None
         if getattr(self, "_compare_rows_all", []):
             self._render_compare()
 
