@@ -60,7 +60,7 @@ DIFF_FG = "#b91c1c"
 UNMATCH_BG = "#eef1f4"         # 가격비교: 미매칭 행
 UNMATCH_FG = "#6b7280"
 
-MONEY_COLS = {"입고단가", "총단가", "Wiz_원가", "Ecount_입고단가", "원가-입고단가차이",
+MONEY_COLS = {"입고단가", "총단가", "Wiz_원가", "Ecount_평균원가", "원가-평균원가차이",
               "Wiz_재고", "Ecount_재고", "재고차이"}  # 우측정렬(금액·수량) 컬럼
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # 실시간 활동 스피너
@@ -462,6 +462,71 @@ def export_rows_excel(rows: list[dict], initial: str = "export.xlsx",
 export_rows_csv = export_rows_excel
 
 
+class Splash(tk.Toplevel):
+    """실행 시 표시되는 로딩 화면(브랜드 + 진행 상태 + 스피너)."""
+
+    def __init__(self, parent, status: str = "로딩 중…"):
+        super().__init__(parent)
+        self.overrideredirect(True)
+        self.configure(bg=ACCENT)
+        w, h = 500, 290
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+        try:
+            self.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+
+        card = tk.Frame(self, bg="white")
+        card.place(x=12, y=12, width=w - 24, height=h - 24)
+        tk.Frame(card, bg=ACCENT, height=10).pack(fill="x")    # 상단 민트 띠
+        tk.Label(card, text="실시간 재고 현황", bg="white", fg=ACCENT_ACTIVE,
+                 font=(FONT, 19, "bold")).pack(pady=(38, 0))
+        tk.Label(card, text="(EcountERP) 및 평균 원가(Wizfasta) 비교", bg="white",
+                 fg=TEXT, font=(FONT, 11)).pack(pady=(4, 0))
+        tk.Label(card, text=f"v{APP_VERSION}  ·  THE FEEL KOREA CO.,LTD.", bg="white",
+                 fg=MUTED, font=(FONT, 9)).pack(pady=(10, 0))
+
+        self._status = tk.StringVar(value=status)
+        self._spin = tk.StringVar(value=SPINNER[0])
+        row = tk.Frame(card, bg="white")
+        row.pack(pady=(30, 0))
+        tk.Label(row, textvariable=self._spin, bg="white", fg=ACCENT,
+                 font=(FONT, 13, "bold")).pack(side="left", padx=(0, 8))
+        tk.Label(row, textvariable=self._status, bg="white", fg=SUBTLE,
+                 font=(FONT, 10)).pack(side="left")
+
+        self._anim_on = True
+        self._i = 0
+        self._tick()
+        # 확실히 표시(환경에 따라 overrideredirect 창이 늦게 뜨는 경우 대비)
+        try:
+            self.update_idletasks()
+            self.lift()
+        except tk.TclError:
+            pass
+
+    def set_status(self, msg: str) -> None:
+        try:
+            self._status.set(msg)
+        except tk.TclError:
+            pass
+
+    def _tick(self) -> None:
+        if not self._anim_on:
+            return
+        self._spin.set(SPINNER[self._i % len(SPINNER)])
+        self._i += 1
+        self.after(120, self._tick)
+
+    def close(self) -> None:
+        self._anim_on = False
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
+
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -469,6 +534,21 @@ class App(tk.Tk):
         self.geometry("1120x720")
         self.minsize(940, 600)
         self.configure(bg=BG)
+
+        # 로딩 화면(스플래시) — 메인은 준비될 때까지 숨김
+        self.withdraw()
+        self._splash = None
+        self._splash_t0 = time.time()
+        try:
+            self._splash = Splash(self)
+            self.update()                      # 스플래시 즉시 표시
+            try:
+                import pyi_splash               # PyInstaller 스플래시(있으면) 닫기
+                pyi_splash.close()
+            except Exception:                   # noqa: BLE001
+                pass
+        except Exception:                       # noqa: BLE001
+            self._splash = None
 
         self._inventory_rows: list[dict] = []   # 탭1 조회 결과(원본: 가격비교 탭에서 사용)
         self._inventory_display: list[dict] = []  # 파싱 컬럼 포함 표시용(필터 적용 후)
@@ -533,8 +613,8 @@ class App(tk.Tk):
 
         self._switch_tab("inv")   # 기본 탭
 
-        # 실행 시 백그라운드로 업데이트 확인
-        self.after(800, self._start_update_check)
+        # 로딩 화면에서 최신 버전 확인 → 있으면 묻지 않고 즉시 자동 설치, 없으면 메인 표시
+        self.after(80, self._splash_update_then_start)
 
     def _switch_tab(self, key: str) -> None:
         frame = self._tab_frames.get(key)
@@ -680,7 +760,13 @@ class App(tk.Tk):
         messagebox.showinfo("입고단가 캐시", "입고단가 캐시를 비웠습니다.\n다음 조회 때 품목등록에서 다시 받아옵니다.")
 
     # ================= 자동 업데이트 =================
-    def _start_update_check(self) -> None:
+    def _splash_update_then_start(self) -> None:
+        """로딩 화면에서 최신 버전을 확인하고, 있으면 즉시 자동 설치한다."""
+        if getattr(self, "_splash", None):
+            self._splash.set_status("최신 버전 확인 중…")
+        threading.Thread(target=self._splash_update_worker, daemon=True).start()
+
+    def _splash_update_worker(self) -> None:
         cfg = {}
         try:
             if os.path.exists(CONFIG_PATH):
@@ -688,40 +774,61 @@ class App(tk.Tk):
                     cfg = json.load(f) or {}
         except (OSError, json.JSONDecodeError):
             cfg = {}
-        # 저장소가 설정에 없으면 기본 저장소로 검사(별도 설정 없이도 자동 업데이트)
         if not (cfg.get("github_repo") or cfg.get("update_url")):
-            cfg["github_repo"] = DEFAULT_GITHUB_REPO
-        threading.Thread(target=self._do_update_check, args=(cfg,), daemon=True).start()
+            cfg["github_repo"] = DEFAULT_GITHUB_REPO   # 설정 없어도 기본 저장소로 검사
+        try:
+            manifest = updater.check(cfg)
+        except Exception:  # noqa: BLE001
+            manifest = None
 
-    def _do_update_check(self, cfg: dict) -> None:
-        manifest = updater.check(cfg)
-        if manifest:
-            self.after(0, self._auto_update, manifest)
+        def done():
+            if manifest and manifest.get("url"):
+                ver = manifest.get("version", "")
+                if getattr(self, "_splash", None):
+                    self._splash.set_status(f"새 버전 {ver} 자동 설치 중…")
+                self._run_update(manifest["url"], ver)   # 묻지 않고 즉시 설치
+            else:
+                self._finish_splash()                    # 최신 → 메인 표시
+        self.after(0, done)
 
-    def _auto_update(self, manifest: dict) -> None:
-        """묻지 않고 최신 버전을 자동으로 내려받아 무인 설치한다."""
-        ver = manifest.get("version", "")
-        dl = manifest.get("url", "")
-        if not dl:
-            return   # 다운로드 URL 이 없으면 조용히 건너뜀
-        self._run_update(dl, ver)
+    def _finish_splash(self) -> None:
+        """로딩 화면을 닫고 메인 창을 보여준다(최소 표시시간 보장)."""
+        elapsed = time.time() - getattr(self, "_splash_t0", 0)
+        if elapsed < 1.1:   # 너무 빨리 깜빡이지 않도록 최소 표시
+            self.after(int((1.1 - elapsed) * 1000), self._finish_splash)
+            return
+        sp = getattr(self, "_splash", None)
+        if sp is not None:
+            sp.close()
+            self._splash = None
+        self.deiconify()
+        self.lift()
+
+    def _set_update_status(self, msg: str) -> None:
+        for setter in (
+            lambda: self.status.set(msg),
+            lambda: self.cmp_status.set(msg),
+            lambda: self._splash.set_status(msg) if getattr(self, "_splash", None) else None,
+        ):
+            try:
+                setter()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _run_update(self, url: str, ver: str = "") -> None:
-        try:
-            self.status.set(f"새 버전 {ver} 자동 업데이트 중… (다운로드)")
-        except Exception:
-            pass
-        try:
-            self.cmp_status.set(f"새 버전 {ver} 자동 업데이트 중…")
-        except Exception:
-            pass
+        self._set_update_status(f"새 버전 {ver} 자동 설치 중… (다운로드)")
 
         def worker():
             try:
                 path = updater.download_installer(url)
             except Exception:  # noqa: BLE001
-                # 자동 업데이트 실패는 사용자를 방해하지 않고 조용히 넘어감(다음 실행 시 재시도)
-                self.after(0, lambda: self.status.set("업데이트 확인 실패 — 다음 실행 시 재시도"))
+                # 다운로드 실패: 로딩 중이면 그대로 앱을 띄우고, 아니면 상태만 표시(다음 실행 시 재시도)
+                def fail():
+                    if getattr(self, "_splash", None):
+                        self._finish_splash()
+                    else:
+                        self._set_update_status("업데이트 확인 실패 — 다음 실행 시 재시도")
+                self.after(0, fail)
                 return
 
             def finish():
@@ -808,8 +915,9 @@ class App(tk.Tk):
         self._wiz_rows: list[dict] = []
 
         ttk.Label(root, style="Muted.TLabel",
-                  text="① 재고현황 탭에서 조회 후 → ② [Wizfasta 원가 가져오기]로 상품DB 원가를 받아 "
-                       "모델명으로 비교합니다. (60초 초과 시 자동 재시작 / [중단]으로 멈춤)\n"
+                  text="① 재고현황 탭에서 조회 후 → ② [Wizfasta 원가 가져오기]로 상품DB 원가를 받아 모델명으로 "
+                       "비교합니다. EcountERP 값은 재고현황 소계의 '평균원가'(모델별 가중평균)를 사용합니다. "
+                       "(60초 초과 시 자동 재시작 / [중단]으로 멈춤)\n"
                        "※ 표에서 행을 선택해 Ctrl+C, 또는 우클릭 메뉴(셀/행/전체 복사)·더블클릭(셀 복사)으로 복사할 수 있습니다."
                   ).pack(fill="x", padx=16, pady=(12, 2))
 

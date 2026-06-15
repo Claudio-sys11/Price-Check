@@ -148,12 +148,17 @@ def build_cost_comparison(
 
     wizfasta_rows: [{모델명, 브랜드, 원가, 재고}, ...]
     ecount_rows  : 재고현황 표시 데이터 행(모델명·입고단가·재고수량 포함, 소계 제외)
-    반환: 브랜드 | 모델명 | Wiz_원가 | Ecount_입고단가 | 원가-입고단가차이
+
+    EcountERP 비교값은 재고현황 '소계의 평균원가'와 동일한 기준 — 모델별 가중 평균원가
+    ( = Σ(입고단가 × 재고수량) / Σ재고수량 ) — 를 사용한다. (수량 합이 0이면 단순 평균)
+
+    반환: 브랜드 | 모델명 | Wiz_원가 | Ecount_평균원가 | 원가-평균원가차이
           | Wiz_재고 | Ecount_재고 | 재고차이 | 매칭
     """
-    # EcountERP: 정규화 모델명 -> 입고단가(0 아닌 값 우선), 재고수량(모델 전체 합계)
-    ec_map: dict[str, float] = {}
-    ec_qty_map: dict[str, float] = {}
+    # EcountERP: 정규화 모델명 -> 가중 평균원가(소계 평균단가와 동일), 재고수량(모델 합계)
+    ec_sum_amt: dict[str, float] = {}     # Σ(입고단가 × 재고수량)
+    ec_qty_map: dict[str, float] = {}     # Σ재고수량
+    ec_prices: dict[str, list] = {}       # 수량합 0 대비 단순평균용 단가 목록
     for e in ecount_rows:
         if e.get("_subtotal"):
             continue
@@ -161,15 +166,24 @@ def build_cost_comparison(
         if not k:
             continue
         price = _to_number(e.get("입고단가"))
-        if k not in ec_map or (ec_map[k] == 0 and price):
-            ec_map[k] = price
-        ec_qty_map[k] = ec_qty_map.get(k, 0.0) + _to_number(e.get("재고수량"))
+        qty = _to_number(e.get("재고수량"))
+        ec_sum_amt[k] = ec_sum_amt.get(k, 0.0) + price * qty
+        ec_qty_map[k] = ec_qty_map.get(k, 0.0) + qty
+        ec_prices.setdefault(k, []).append(price)
+
+    ec_avg_map: dict[str, float] = {}     # 모델별 평균원가
+    for k, qsum in ec_qty_map.items():
+        if qsum:
+            ec_avg_map[k] = ec_sum_amt[k] / qsum
+        else:
+            ps = [p for p in ec_prices.get(k, []) if p] or ec_prices.get(k, [])
+            ec_avg_map[k] = (sum(ps) / len(ps)) if ps else 0.0
 
     rows_raw = []
     for w in wizfasta_rows:
         k = normalize_model(w.get("모델명"))
         wiz_cost = _to_number(w.get("원가"))
-        ec_price = ec_map.get(k)
+        ec_price = ec_avg_map.get(k)        # 모델별 평균원가
         matched = ec_price is not None
         diff = (wiz_cost - ec_price) if matched else None
         has_diff = matched and diff is not None and int(round(diff)) != 0
@@ -196,8 +210,8 @@ def build_cost_comparison(
             "브랜드": w.get("브랜드", ""),
             "모델명": w.get("모델명", ""),
             "Wiz_원가": f"{int(round(wiz_cost)):,}",
-            "Ecount_입고단가": (f"{int(round(ec_price)):,}" if matched else ""),
-            "원가-입고단가차이": (f"{int(round(diff)):,}" if diff is not None else ""),
+            "Ecount_평균원가": (f"{int(round(ec_price)):,}" if matched else ""),
+            "원가-평균원가차이": (f"{int(round(diff)):,}" if diff is not None else ""),
             "Wiz_재고": f"{int(round(wiz_qty)):,}",
             "Ecount_재고": (f"{int(round(ec_qty)):,}" if ec_qty is not None else ""),
             "재고차이": (f"{int(round(qty_diff)):,}" if qty_diff is not None else ""),
