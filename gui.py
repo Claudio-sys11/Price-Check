@@ -28,6 +28,11 @@ from version import APP_VERSION
 APP_NAME = "EcountInventory"
 DEFAULT_GITHUB_REPO = "Claudio-sys11/Price-Check"   # 자동 업데이트 기본 저장소
 
+# 인증 정보 고정값
+FIXED_COM_CODE = "188894"          # 회사코드(고정·수정 불가)
+FIXED_USER_ID = "THEFEELKOREA"     # 사용자ID(고정·수정 불가)
+DEFAULT_API_CERT_KEY = "28ac7027d054c443cb50b538fc5063f058"   # API 인증키(기본값·수정 가능)
+
 
 def resource_path(rel: str) -> str:
     """PyInstaller 빌드/개발 환경 모두에서 번들 리소스 경로를 해결한다."""
@@ -641,9 +646,9 @@ class App(tk.Tk):
         self._update_url: str = ""
 
         # 인증/설정 변수 (메인 화면엔 표시하지 않고 '설정' 메뉴 다이얼로그에서 입력)
-        self.var_com = tk.StringVar()
-        self.var_user = tk.StringVar()
-        self.var_key = tk.StringVar()
+        self.var_com = tk.StringVar(value=FIXED_COM_CODE)     # 고정
+        self.var_user = tk.StringVar(value=FIXED_USER_ID)     # 고정
+        self.var_key = tk.StringVar(value=DEFAULT_API_CERT_KEY)  # 기본값(수정 가능)
         self.var_env = tk.StringVar(value="production")
         self.var_show_key = tk.BooleanVar(value=False)
         self.var_github = tk.StringVar(value=DEFAULT_GITHUB_REPO)
@@ -775,10 +780,15 @@ class App(tk.Tk):
 
         auth = ttk.LabelFrame(win, text="인증 정보")
         auth.pack(fill="x", padx=12, pady=(12, 6))
+        # 회사코드·사용자ID는 고정값(수정 불가) — readonly
+        self.var_com.set(FIXED_COM_CODE)
+        self.var_user.set(FIXED_USER_ID)
         ttk.Label(auth, text="회사코드").grid(row=0, column=0, sticky="e", **pad)
-        ttk.Entry(auth, textvariable=self.var_com, width=30).grid(row=0, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Entry(auth, textvariable=self.var_com, width=30, state="readonly").grid(
+            row=0, column=1, columnspan=2, sticky="w", **pad)
         ttk.Label(auth, text="사용자ID").grid(row=1, column=0, sticky="e", **pad)
-        ttk.Entry(auth, textvariable=self.var_user, width=30).grid(row=1, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Entry(auth, textvariable=self.var_user, width=30, state="readonly").grid(
+            row=1, column=1, columnspan=2, sticky="w", **pad)
         ttk.Label(auth, text="API 인증키").grid(row=2, column=0, sticky="e", **pad)
         self.ent_key = ttk.Entry(auth, textvariable=self.var_key, width=30, show="*")
         self.ent_key.grid(row=2, column=1, sticky="w", **pad)
@@ -1422,9 +1432,10 @@ class App(tk.Tk):
                 cfg = json.load(f)
         except (OSError, json.JSONDecodeError):
             return
-        self.var_com.set(cfg.get("COM_CODE", ""))
-        self.var_user.set(cfg.get("USER_ID", ""))
-        self.var_key.set(cfg.get("API_CERT_KEY", ""))
+        # 회사코드·사용자ID는 고정값(저장값 무시), API 인증키는 저장값 우선·없으면 기본값
+        self.var_com.set(FIXED_COM_CODE)
+        self.var_user.set(FIXED_USER_ID)
+        self.var_key.set(cfg.get("API_CERT_KEY") or DEFAULT_API_CERT_KEY)
         self.var_env.set(cfg.get("ENV", "production"))
         self._update_url = cfg.get("update_url", "")
         self.var_github.set(cfg.get("github_repo", "") or DEFAULT_GITHUB_REPO)
@@ -1458,9 +1469,9 @@ class App(tk.Tk):
 
     def _current_config(self) -> dict:
         return {
-            "COM_CODE": self.var_com.get().strip(),
-            "USER_ID": self.var_user.get().strip(),
-            "API_CERT_KEY": self.var_key.get().strip(),
+            "COM_CODE": FIXED_COM_CODE,          # 고정
+            "USER_ID": FIXED_USER_ID,            # 고정
+            "API_CERT_KEY": (self.var_key.get().strip() or DEFAULT_API_CERT_KEY),
             "LAN_TYPE": "ko-KR",
             "ENV": self.var_env.get(),
             "update_url": getattr(self, "_update_url", ""),
