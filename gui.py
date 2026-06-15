@@ -14,6 +14,7 @@ import json
 import os
 import re
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
@@ -42,6 +43,8 @@ SUBTOTAL_BG = "#d7f5ed"  # 소계 행 강조(민트)
 SELECT_BG = "#a7e8da"   # 표 선택행(민트)
 
 MONEY_COLS = {"입고단가", "총단가", "Wiz_원가", "Ecount_입고단가", "원가-입고단가차이"}  # 우측정렬 금액 컬럼
+
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # 실시간 활동 스피너
 
 # Wizfasta 원가 가져오기 진행 체크리스트 단계
 WIZ_STEPS = [
@@ -199,6 +202,11 @@ class App(tk.Tk):
         self._sort_col: str | None = None    # 정렬 기준 열(헤더 클릭)
         self._sort_desc: bool = False        # 내림차순 여부
         self._query_seq: int = 0             # 조회 시퀀스(백그라운드 가격조회 취소용)
+        self._active_step: str | None = None   # 현재 진행 중 단계
+        self._active_detail: str = ""
+        self._active_since: float = 0.0
+        self._anim_idx: int = 0
+        self._anim_running: bool = False
         self._inventory_raw: dict | None = None
         self._compare_rows: list[dict] = []
         self._update_url: str = ""
@@ -533,26 +541,56 @@ class App(tk.Tk):
         tf.columnconfigure(0, weight=1)
 
     def _reset_steps(self) -> None:
+        self._active_step = None
         for key, (lb, label) in self._step_labels.items():
             lb.configure(text=f"⬜  {label}", foreground=MUTED)
 
     def _set_step(self, key: str, detail: str = "") -> None:
-        """체크리스트: key 이전 단계는 완료(✅), 현재 단계는 진행(⏳)으로 표시."""
+        """현재 진행 단계를 지정한다. 이전 단계는 ✅, 현재 단계는 ⏳(애니메이션)."""
         order = [k for k, _ in WIZ_STEPS]
         if key not in order:
             return
         idx = order.index(key)
+        if key != self._active_step:
+            self._active_since = time.time()
+        self._active_step = key
+        self._active_detail = detail
         for i, (k, label) in enumerate(WIZ_STEPS):
             lb = self._step_labels[k][0]
             if i < idx:
                 lb.configure(text=f"✅  {label}", foreground="#0d9488")
-            elif i == idx:
-                txt = f"⏳  {label}" + (f"  — {detail}" if detail else "")
-                lb.configure(text=txt, foreground=ACCENT)
-            else:
+            elif i > idx:
                 lb.configure(text=f"⬜  {label}", foreground=MUTED)
+        self._render_active_step()
+
+    def _render_active_step(self) -> None:
+        """현재 단계를 [아이콘] [이름] · [세부정보]  [스피너] [경과초] 로 실시간 표시."""
+        if not self._active_step:
+            return
+        lb, label = self._step_labels[self._active_step]
+        spin = SPINNER[self._anim_idx % len(SPINNER)]
+        elapsed = int(time.time() - self._active_since)
+        det = f"  ·  {self._active_detail}" if self._active_detail else ""
+        lb.configure(text=f"⏳  {label}{det}   {spin} {elapsed}s", foreground=ACCENT)
+
+    def _start_anim(self) -> None:
+        self._anim_running = True
+        self._anim_idx = 0
+        self._tick_anim()
+
+    def _tick_anim(self) -> None:
+        if not self._anim_running:
+            return
+        self._anim_idx += 1
+        self._render_active_step()
+        self.after(150, self._tick_anim)
+
+    def _stop_anim(self) -> None:
+        self._anim_running = False
 
     def _mark_all_done(self) -> None:
+        self._stop_anim()
+        self._active_step = None
         for key, (lb, label) in self._step_labels.items():
             lb.configure(text=f"✅  {label}", foreground="#0d9488")
 
@@ -572,6 +610,8 @@ class App(tk.Tk):
         self.btn_wiz.configure(state="disabled")
         self.btn_cmp_csv.configure(state="disabled")
         self.cmp_status.set("진행 중…")
+        self._set_step("start", "Chrome 준비")
+        self._start_anim()   # 실시간 활동 표시(블로킹 단계에서도 멈춘 듯 보이지 않게)
         threading.Thread(target=self._do_fetch_wizfasta, args=(corp, uid, pw), daemon=True).start()
 
     def _do_fetch_wizfasta(self, corp: str, uid: str, pw: str) -> None:
@@ -591,6 +631,10 @@ class App(tk.Tk):
         self.after(0, lambda: self._wiz_done(rows))
 
     def _wiz_failed(self, msg: str) -> None:
+        self._stop_anim()
+        if self._active_step:   # 멈춘 단계를 ❌로 표시
+            lb, label = self._step_labels[self._active_step]
+            lb.configure(text=f"❌  {label}", foreground="#dc2626")
         self.btn_wiz.configure(state="normal")
         self.cmp_status.set("실패")
         messagebox.showerror("Wizfasta 가져오기 실패", msg)
@@ -599,6 +643,7 @@ class App(tk.Tk):
         self.btn_wiz.configure(state="normal")
         self._wiz_rows = wiz_rows or []
         if not self._wiz_rows:
+            self._stop_anim()
             self.cmp_status.set("Wizfasta 원가 0건 — 로그인/조회 상태를 확인하세요.")
             messagebox.showwarning("데이터 없음", "Wizfasta에서 원가를 받지 못했습니다(0건).")
             return
