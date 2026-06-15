@@ -360,6 +360,34 @@ def gray_button(parent, text, command, *, bg=BG, **kw):
                          fg=BTN_GRAY_FG, fg_disabled=BTN_GRAY_FG_DISABLED, **kw)
 
 
+class StatChip(tk.Canvas):
+    """둥근 통계 칩 — 큰 숫자 + 라벨을 색상 배경에 표시(결과 수 시인성 강화)."""
+
+    def __init__(self, parent, label, *, bg=BG, fill="#e0f7f1", fg="#0f766e",
+                 cw=148, ch=60, radius=20):
+        super().__init__(parent, bg=bg, highlightthickness=0, bd=0, width=cw, height=ch)
+        self._label = label
+        self._fill, self._fg = fill, fg
+        self._radius = radius
+        self._cw, self._ch = cw, ch
+        self._value = "—"
+        self.bind("<Configure>", lambda e: self._draw())
+        self._draw()
+
+    def set_value(self, value):
+        self._value = str(value)
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        self.create_polygon(_round_rect_points(1, 1, self._cw - 1, self._ch - 1, self._radius),
+                            fill=self._fill, outline="", smooth=True)
+        self.create_text(self._cw // 2, self._ch // 2 - 9, text=self._value,
+                         fill=self._fg, font=(FONT, 18, "bold"))
+        self.create_text(self._cw // 2, self._ch // 2 + 15, text=self._label,
+                         fill=self._fg, font=(FONT, 9, "bold"))
+
+
 def export_rows_csv(rows: list[dict], initial: str = "export.csv") -> None:
     import csv
     if not rows:
@@ -710,6 +738,7 @@ class App(tk.Tk):
         xsb.grid(row=1, column=0, sticky="ew")
         tf.rowconfigure(0, weight=1)
         tf.columnconfigure(0, weight=1)
+        self._enable_tree_copy(self.tree_inv, self.status)
 
     def _toggle_key(self) -> None:
         if self.ent_key is not None:
@@ -726,7 +755,8 @@ class App(tk.Tk):
 
         ttk.Label(root, style="Muted.TLabel",
                   text="① 재고현황 탭에서 조회 후 → ② [Wizfasta 원가 가져오기]로 상품DB 원가를 받아 "
-                       "모델명으로 비교합니다. (60초 초과 시 자동 재시작 / [중단]으로 멈춤)"
+                       "모델명으로 비교합니다. (60초 초과 시 자동 재시작 / [중단]으로 멈춤)\n"
+                       "※ 표에서 행을 선택해 Ctrl+C, 또는 우클릭 메뉴(셀/행/전체 복사)·더블클릭(셀 복사)으로 복사할 수 있습니다."
                   ).pack(fill="x", padx=16, pady=(12, 2))
 
         btns = ttk.Frame(root)
@@ -749,6 +779,16 @@ class App(tk.Tk):
         )
         ttk.Label(btns, textvariable=self.cmp_status, style="Status.TLabel").pack(side="right")
 
+        # 결과 요약(둥근 통계 칩) — 완료 시 건수를 크게 표시
+        self.cmp_summary = tk.Frame(root, bg=BG)
+        self.cmp_summary.pack(fill="x", padx=16, pady=(2, 4))
+        self.chip_total = StatChip(self.cmp_summary, "전체 (Wiz)", fill="#e0f7f1", fg="#0f766e")
+        self.chip_diff = StatChip(self.cmp_summary, "단가차이", fill=DIFF_BG, fg=DIFF_FG)
+        self.chip_unmatch = StatChip(self.cmp_summary, "미매칭", fill=UNMATCH_BG, fg="#4b5563")
+        self.chip_same = StatChip(self.cmp_summary, "단가일치", fill="#d7f5ed", fg="#0d9488")
+        for c in (self.chip_total, self.chip_diff, self.chip_unmatch, self.chip_same):
+            c.pack(side="left", padx=(0, 10))
+
         # 진행 체크리스트
         chk = ttk.LabelFrame(root, text=" 진행 상황 ")
         chk.pack(fill="x", padx=16, pady=(0, 6))
@@ -769,6 +809,81 @@ class App(tk.Tk):
         xsb.grid(row=1, column=0, sticky="ew")
         tf.rowconfigure(0, weight=1)
         tf.columnconfigure(0, weight=1)
+        self._enable_tree_copy(self.tree_cmp, self.cmp_status)
+
+    # ---- 표 복사 기능(우클릭/Ctrl+C/더블클릭) ----
+    def _enable_tree_copy(self, tree: ttk.Treeview, status_var: tk.StringVar) -> None:
+        tree.configure(selectmode="extended")
+        tree._copy_status = status_var          # 복사 결과 안내용
+        tree._ctx_cell = (None, None)
+        menu = tk.Menu(tree, tearoff=0)
+        menu.add_command(label="이 셀 복사", command=lambda: self._copy_cell(tree))
+        menu.add_command(label="선택 행 복사", command=lambda: self._copy_rows(tree))
+        menu.add_separator()
+        menu.add_command(label="전체 복사 (머리글 포함)",
+                         command=lambda: self._copy_rows(tree, all_rows=True, header=True))
+        tree._ctx_menu = menu
+
+        def on_right(e):
+            row = tree.identify_row(e.y)
+            col = tree.identify_column(e.x)
+            if row:
+                if row not in tree.selection():
+                    tree.selection_set(row)
+                tree._ctx_cell = (row, col)
+                try:
+                    menu.tk_popup(e.x_root, e.y_root)
+                finally:
+                    menu.grab_release()
+
+        tree.bind("<Button-3>", on_right)
+        tree.bind("<Control-c>", lambda e: self._copy_rows(tree))
+        tree.bind("<Control-C>", lambda e: self._copy_rows(tree))
+        tree.bind("<Double-1>", lambda e: self._copy_cell_at(tree, e))
+
+    def _set_copy_status(self, tree, msg: str) -> None:
+        sv = getattr(tree, "_copy_status", None)
+        if sv is not None:
+            sv.set(msg)
+
+    def _copy_text(self, text: str) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(text)
+
+    def _copy_cell_at(self, tree, e) -> None:
+        row = tree.identify_row(e.y)
+        col = tree.identify_column(e.x)
+        if row:
+            tree._ctx_cell = (row, col)
+            self._copy_cell(tree)
+
+    def _copy_cell(self, tree) -> None:
+        row, col = getattr(tree, "_ctx_cell", (None, None))
+        cols = list(tree["columns"])
+        if not row or not col or not cols:
+            return
+        try:
+            idx = int(str(col).replace("#", "")) - 1
+        except ValueError:
+            return
+        if idx < 0 or idx >= len(cols):
+            return
+        val = str(tree.set(row, cols[idx]))
+        self._copy_text(val)
+        self._set_copy_status(tree, f"복사됨: {val[:40]}")
+
+    def _copy_rows(self, tree, all_rows: bool = False, header: bool = False) -> None:
+        items = tree.get_children() if all_rows else tree.selection()
+        cols = list(tree["columns"])
+        if not items or not cols:
+            return
+        lines = []
+        if header:
+            lines.append("\t".join(cols))
+        for it in items:
+            lines.append("\t".join(str(tree.set(it, c)) for c in cols))
+        self._copy_text("\n".join(lines))
+        self._set_copy_status(tree, f"{len(items)}행 복사됨 (클립보드)")
 
     def _reset_steps(self) -> None:
         self._active_step = None
@@ -918,10 +1033,19 @@ class App(tk.Tk):
         self._compare_rows = cmp.build_cost_comparison(self._wiz_rows, ecount_data)
         fill_tree(self.tree_cmp, self._compare_rows)
         self.btn_cmp_csv.configure(state="normal")
-        matched = sum(1 for r in self._compare_rows if r.get("매칭") == "O")
+
+        total = len(self._compare_rows)
+        n_diff = sum(1 for r in self._compare_rows if r.get("_tag") == "diff")
+        n_unmatch = sum(1 for r in self._compare_rows if r.get("_tag") == "unmatched")
+        n_same = sum(1 for r in self._compare_rows if r.get("_tag") == "same")
+        # 결과 수를 둥근 통계 칩으로 크게 표시(시인성)
+        self.chip_total.set_value(f"{total:,}")
+        self.chip_diff.set_value(f"{n_diff:,}")
+        self.chip_unmatch.set_value(f"{n_unmatch:,}")
+        self.chip_same.set_value(f"{n_same:,}")
+
         self._mark_all_done()
-        self.cmp_status.set(
-            f"완료 — Wiz {len(self._wiz_rows)}건 / 모델명 매칭 {matched} / 미매칭 {len(self._compare_rows) - matched}")
+        self.cmp_status.set(f"완료 — 총 {total:,}건")
 
     # ================= 탭3: 설치 현황 =================
     def _build_setup_tab(self) -> None:
