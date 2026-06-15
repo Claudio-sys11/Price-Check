@@ -20,6 +20,8 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox, filedialog
 
+from tksheet import Sheet
+
 from ecount_api import EcountClient, EcountApiError
 import compare as cmp
 import updater
@@ -983,7 +985,7 @@ class App(tk.Tk):
         self._tabbar = RoundedTabBar(
             self,
             [("inv", "재고현황 조회", {}),
-             ("cmp", "가격비교", {}),
+             ("cmp", "원가비교", {}),
              ("setup", "설치 현황",
               {"side": "right", "height": 24, "font": (FONT, 9, "bold"),
                "padx": 13, "radius": 12})],
@@ -1369,8 +1371,8 @@ class App(tk.Tk):
                   text="① 재고현황 탭에서 조회 후 → ② [Wizfasta 원가 가져오기]로 상품DB 원가를 받아 모델명으로 비교합니다.\n"
                        "EcountERP 값은 재고현황 소계의 '평균원가'(모델별 가중평균)를 사용합니다. "
                        "(60초 초과 시 자동 재시작 / [중단]으로 멈춤)\n"
-                       "※ 모델명을 더블클릭하면 재고현황 탭에서 해당 모델로 조회합니다. "
-                       "행 선택 후 Ctrl+C·우클릭(셀/행/전체)으로 복사할 수 있습니다."
+                       "※ 셀을 클릭/드래그해 원하는 범위를 선택하고 Ctrl+C로 복사하세요. "
+                       "모델명 셀을 더블클릭하면 재고현황 탭에서 해당 모델로 조회합니다."
                   ).pack(anchor="w", pady=(0, 4))
 
         btns = ttk.Frame(left)
@@ -1421,40 +1423,87 @@ class App(tk.Tk):
         ent_cb.bind("<KeyRelease>", self._on_cmp_filter_change)
         ent_cm.bind("<KeyRelease>", self._on_cmp_filter_change)
 
+        # 원가비교 표 — 셀 단위 선택/드래그 범위 선택/복사가 가능한 시트(tksheet)
         tf = tk.Frame(root, bg=BORDER)
         tf.pack(fill="both", expand=True, padx=16, pady=(6, 14))
-        self.tree_cmp = ttk.Treeview(tf, show="headings")
-        ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_cmp.yview)
-        xsb = ttk.Scrollbar(tf, orient="horizontal", command=self.tree_cmp.xview)
-        self.tree_cmp.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
-        self.tree_cmp.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
-        ysb.grid(row=0, column=1, sticky="ns")
-        xsb.grid(row=1, column=0, sticky="ew")
-        tf.rowconfigure(0, weight=1)
-        tf.columnconfigure(0, weight=1)
-        self._enable_tree_copy(self.tree_cmp, self.cmp_status)
-        # 모델명 더블클릭 → 재고현황 탭으로 이동·조회 (다른 셀 더블클릭은 셀 복사)
-        self.tree_cmp.bind("<Double-1>", self._on_cmp_double)
+        self._cmp_headers = []
+        self.sheet_cmp = Sheet(
+            tf, headers=[], data=[],
+            theme="light blue",
+            header_bg=HEADING_BG, header_fg=HEADING_FG,
+            header_border_fg=HAIRLINE, table_grid_fg="#eef2f1",
+            font=(FONT, 10, "normal"), header_font=(FONT, 10, "bold"),
+            table_selected_cells_bg=SELECT_BG, table_selected_cells_fg=SELECT_FG,
+            table_selected_box_cells_fg=GOLD,
+            table_selected_rows_bg=SELECT_BG, table_selected_rows_fg=SELECT_FG,
+            table_selected_columns_bg=SELECT_BG, table_selected_columns_fg=SELECT_FG,
+            show_x_scrollbar=True, show_y_scrollbar=True)
+        # 셀 선택 + 드래그 범위 선택 + 복사 (편집은 비활성)
+        self.sheet_cmp.enable_bindings(
+            "single_select", "drag_select", "ctrl_select", "shift_select",
+            "select_all", "copy", "arrowkeys",
+            "column_width_resize", "double_click_column_resize",
+            "right_click_popup_menu", "rc_select")
+        self.sheet_cmp.pack(fill="both", expand=True, padx=1, pady=1)
+        self.sheet_cmp.extra_bindings("double_click_cell", self._on_cmp_sheet_double)
 
-    def _on_cmp_double(self, event) -> None:
-        """가격비교 표 더블클릭: 모델명 열이면 재고현황 조회, 그 외 열은 셀 복사."""
-        tree = self.tree_cmp
-        row = tree.identify_row(event.y)
-        col = tree.identify_column(event.x)
-        if not row:
+    def _on_cmp_sheet_double(self, event=None) -> None:
+        """원가비교 시트 더블클릭: 모델명 셀이면 재고현황 탭으로 이동·조회."""
+        r = getattr(event, "row", None)
+        c = getattr(event, "column", None)
+        if r is None or c is None:
+            sel = self.sheet_cmp.get_currently_selected()
+            if sel:
+                r, c = getattr(sel, "row", None), getattr(sel, "column", None)
+        if r is None or c is None:
             return
-        cols = list(tree["columns"])
+        headers = self._cmp_headers
+        if 0 <= c < len(headers) and headers[c] == "모델명":
+            try:
+                model = str(self.sheet_cmp.get_cell_data(r, c) or "")
+            except Exception:  # noqa: BLE001
+                model = ""
+            if model:
+                self._goto_inventory_for_model(model)
+
+    def _fill_compare_sheet(self, rows: list[dict]) -> None:
+        """원가비교 시트를 채우고 행 색상·열정렬·열폭을 적용한다."""
+        headers = []
+        for r in rows:
+            for k in r.keys():
+                if not k.startswith("_") and k not in headers:
+                    headers.append(k)
+        if not headers:
+            headers = ["브랜드", "모델명", "Wiz_원가", "Ecount_평균원가", "원가-평균원가차이",
+                       "Wiz_재고", "Ecount_재고", "재고차이", "매칭"]
+        self._cmp_headers = headers
+        data = [[r.get(h, "") for h in headers] for r in rows]
+
+        sh = self.sheet_cmp
+        sh.headers(headers)
+        sh.set_sheet_data(data, reset_col_positions=True, reset_row_positions=True, redraw=False)
         try:
-            idx = int(str(col).replace("#", "")) - 1
-        except ValueError:
-            idx = -1
-        colname = cols[idx] if 0 <= idx < len(cols) else ""
-        model = tree.set(row, "모델명") if "모델명" in cols else ""
-        if colname == "모델명" and model:
-            self._goto_inventory_for_model(model)
-        else:
-            tree._ctx_cell = (row, col)
-            self._copy_cell(tree)
+            sh.dehighlight_all()
+        except Exception:  # noqa: BLE001
+            pass
+        for i, r in enumerate(rows):
+            tag = r.get("_tag")
+            if tag == "diff":
+                sh.highlight_rows([i], bg=DIFF_BG, fg=DIFF_FG, redraw=False)
+            elif tag == "unmatched":
+                sh.highlight_rows([i], bg=UNMATCH_BG, fg=UNMATCH_FG, redraw=False)
+        # 금액·수량 컬럼 우측정렬
+        money_cols = [ci for ci, h in enumerate(headers) if h in MONEY_COLS]
+        if money_cols:
+            try:
+                sh.align_columns(columns=money_cols, align="e", redraw=False)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            sh.set_all_cell_sizes_to_text(redraw=False)
+        except Exception:  # noqa: BLE001
+            pass
+        sh.redraw()
 
     def _goto_inventory_for_model(self, model: str) -> None:
         """재고현황 조회 탭으로 전환하고 해당 모델명으로 필터(조회)한다."""
@@ -1737,7 +1786,7 @@ class App(tk.Tk):
 
         rows = [r for r in allrows if keep(r)]
         self._compare_rows = rows
-        fill_tree(self.tree_cmp, rows)
+        self._fill_compare_sheet(rows)
 
         total = len(rows)
         n_diff = sum(1 for r in rows if r.get("_tag") == "diff")
