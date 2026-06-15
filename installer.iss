@@ -26,6 +26,8 @@ AppPublisher={#MyAppPublisher}
 AppCopyright=Copyright (C) THE FEEL KOREA CO.,LTD.
 DefaultDirName={autopf}\EcountInventory
 DefaultGroupName={#MyShortcutName}
+; 업그레이드 시에도 이전 그룹명을 재사용하지 않고 새 이름(Price Check)을 사용
+UsePreviousGroup=no
 DisableProgramGroupPage=yes
 OutputDir=installer
 OutputBaseFilename=EcountInventory_Setup_v{#MyAppVersion}
