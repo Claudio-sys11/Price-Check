@@ -144,8 +144,8 @@ def launch_installer(path: str, silent: bool = True) -> None:
         return
 
     import subprocess
-    # /SILENT: 마법사·질문은 없지만 '설치 진행 창'(파일 현황·진행률)은 표시
-    args = [path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+    # /VERYSILENT: 설치 창을 따로 띄우지 않음(진행 표시는 앱의 업데이터 창이 담당)
+    args = [path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
     DETACHED_PROCESS = 0x00000008
     CREATE_NEW_PROCESS_GROUP = 0x00000200
     CREATE_BREAKAWAY_FROM_JOB = 0x01000000

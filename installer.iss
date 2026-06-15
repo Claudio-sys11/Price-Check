@@ -8,7 +8,7 @@
 #define MyAppId "8F3C2A91-7B4D-4E26-9A1F-EC0A17E5C001"
 #define MyAppName "실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교"
 #define MyShortcutName "Price Check"
-#define MyAppVersion "1.0.33"
+#define MyAppVersion "1.0.34"
 #define MyAppPublisher "THE FEEL KOREA CO.,LTD."
 #define MyAppExeName "EcountInventory.exe"
 
@@ -62,9 +62,8 @@ Name: "{autodesktop}\{#MyShortcutName}"; Filename: "{app}\{#MyAppExeName}"; Task
 
 [Run]
 ; 일반(대화형) 설치: 마침 페이지의 체크박스로 실행
+; (무인/자동 업데이트 설치 시 재실행은 앱의 업데이터 창이 담당하므로 여기서는 하지 않음)
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
-; 무인(자동 업데이트) 설치: 설치 완료 후 새 버전을 자동으로 다시 실행
-Filename: "{app}\{#MyAppExeName}"; Flags: nowait; Check: WizardSilent
 
 [Code]
 { --- 설치 시작 시 이전 버전을 자동으로 제거(언인스톨)한다 --- }

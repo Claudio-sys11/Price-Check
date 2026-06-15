@@ -440,7 +440,7 @@ def export_rows_excel(rows: list[dict], initial: str = "export.xlsx",
     확장자를 .csv 로 지정하면 CSV(서식 없음)로 저장한다.
     """
     if not rows:
-        messagebox.showwarning("데이터 없음", "내보낼 데이터가 없습니다.")
+        pmsg.showwarning("데이터 없음", "내보낼 데이터가 없습니다.")
         return
     path = filedialog.asksaveasfilename(
         title="엑셀로 저장", defaultextension=".xlsx",
@@ -494,9 +494,9 @@ def export_rows_excel(rows: list[dict], initial: str = "export.xlsx",
             ws.freeze_panes = "A2"   # 머리글 고정
             wb.save(path)
     except Exception as exc:  # noqa: BLE001
-        messagebox.showerror("저장 실패", str(exc))
+        pmsg.showerror("저장 실패", str(exc))
         return
-    messagebox.showinfo("저장 완료", f"{len(rows)}건을 저장했습니다.\n{path}")
+    pmsg.showinfo("저장 완료", f"{len(rows)}건을 저장했습니다.\n{path}")
 
 
 # 하위 호환(기존 호출명 유지)
@@ -644,6 +644,159 @@ class Splash(tk.Toplevel):
             self.destroy()
         except tk.TclError:
             pass
+
+
+class PremiumDialog(tk.Toplevel):
+    """둥근 모서리 프리미엄 모달 다이얼로그(스플래시와 동일 디자인).
+
+    표준 messagebox 를 대체하며 info/warning/error/ask(예·아니오) 종류를 지원한다.
+    """
+
+    KEY = "#FF00FE"
+
+    def __init__(self, parent, title, message, kind="info", ask=False):
+        super().__init__(parent)
+        self.overrideredirect(True)
+        self.result = False
+        pal = {
+            "info": (ACCENT, ACCENT_ACTIVE),
+            "warning": (GOLD, "#a9851d"),
+            "error": ("#ef4444", "#dc2626"),
+            "ask": (ACCENT, ACCENT_ACTIVE),
+        }
+        accent, accent_dk = pal.get(kind, pal["info"])
+        w = 440
+        wrap = w - 64
+        bg = "white"
+        try:
+            self.attributes("-topmost", True)
+            self.attributes("-transparentcolor", self.KEY)
+            self.configure(bg=self.KEY)
+            bg = self.KEY
+        except tk.TclError:
+            self.configure(bg="white")
+
+        c = tk.Canvas(self, width=w, height=600, bg=bg, highlightthickness=0, bd=0)
+        c.pack(fill="both", expand=True)
+
+        # 메시지 텍스트(먼저 그려 높이 측정)
+        mid = c.create_text(32, 84, anchor="nw", text=str(message), fill="#374151",
+                            font=(FONT, 10), width=wrap)
+        bb = c.bbox(mid)
+        h = max(150, (bb[3] if bb else 110) + 74)
+
+        try:
+            parent.update_idletasks()
+            px, py = parent.winfo_rootx(), parent.winfo_rooty()
+            pw, ph = parent.winfo_width(), parent.winfo_height()
+            x, y = px + (pw - w) // 2, py + (ph - h) // 2
+        except Exception:  # noqa: BLE001
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            x, y = (sw - w) // 2, (sh - h) // 2
+        self.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
+        c.config(height=h)
+
+        # 카드(텍스트 뒤로) + 상단 악센트 + 제목 + 구분선
+        m, rad = 6, 26
+        card = c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
+                                fill="white", outline=HAIRLINE, width=1, smooth=True)
+        acc = c.create_polygon(_round_rect_points(m, m, w - m, m + 6, 3),
+                               fill=accent, outline="", smooth=True)
+        c.tag_lower(card, mid)
+        c.tag_lower(acc, mid)
+        c.create_text(32, 44, anchor="w", text=str(title), fill=INK, font=(FONT, 13, "bold"))
+        c.create_oval(w - 46, 38, w - 34, 50, fill=accent, outline="")
+        c.create_line(28, 64, w - 28, 64, fill=HAIRLINE)
+
+        # 버튼
+        bar = tk.Frame(self, bg="white")
+        bar.place(x=w - 28, y=h - 30, anchor="e")
+
+        def mk(text, cmd, fill, fdk, fg="white"):
+            return RoundedButton(bar, text, cmd, bg="white", fill=fill, fill_active=fdk,
+                                 fill_disabled=fill, fg=fg, fg_disabled=fg,
+                                 height=34, radius=17, padx=18)
+
+        if ask:
+            mk("예", self._yes, accent, accent_dk).pack(side="right")
+            mk("아니오", self._no, BTN_GRAY, BTN_GRAY_ACTIVE, fg=TEXT).pack(side="right", padx=(0, 10))
+            self.bind("<Return>", lambda e: self._yes())
+            self.bind("<Escape>", lambda e: self._no())
+        else:
+            mk("확인", self._ok, accent, accent_dk).pack(side="right")
+            self.bind("<Return>", lambda e: self._ok())
+            self.bind("<Escape>", lambda e: self._ok())
+
+        try:
+            self.transient(parent)
+        except tk.TclError:
+            pass
+        try:
+            self.update_idletasks()
+            self.lift()
+            self.focus_force()
+            self.grab_set()
+        except tk.TclError:
+            pass
+        self.wait_window(self)
+
+    def _ok(self):
+        self.result = True
+        self._close()
+
+    def _yes(self):
+        self.result = True
+        self._close()
+
+    def _no(self):
+        self.result = False
+        self._close()
+
+    def _close(self):
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
+
+def _active_root():
+    getter = getattr(tk, "_get_default_root", None)
+    if getter:
+        try:
+            return getter()
+        except Exception:  # noqa: BLE001
+            pass
+    return getattr(tk, "_default_root", None)
+
+
+class _PMsg:
+    """messagebox 호환 shim — 둥근 프리미엄 다이얼로그로 표시."""
+
+    @staticmethod
+    def showinfo(title, message, **kw):
+        PremiumDialog(_active_root(), title, message, "info")
+        return "ok"
+
+    @staticmethod
+    def showwarning(title, message, **kw):
+        PremiumDialog(_active_root(), title, message, "warning")
+        return "ok"
+
+    @staticmethod
+    def showerror(title, message, **kw):
+        PremiumDialog(_active_root(), title, message, "error")
+        return "ok"
+
+    @staticmethod
+    def askyesno(title, message, **kw):
+        return PremiumDialog(_active_root(), title, message, "ask", ask=True).result
+
+
+pmsg = _PMsg()
 
 
 class App(tk.Tk):
@@ -894,7 +1047,7 @@ class App(tk.Tk):
 
     def _clear_price_cache(self) -> None:
         save_price_cache({})
-        messagebox.showinfo("입고단가 캐시", "입고단가 캐시를 비웠습니다.\n다음 조회 때 품목등록에서 다시 받아옵니다.")
+        pmsg.showinfo("입고단가 캐시", "입고단가 캐시를 비웠습니다.\n다음 조회 때 품목등록에서 다시 받아옵니다.")
 
     # ================= 자동 업데이트 =================
     def _splash_update_then_start(self) -> None:
@@ -957,8 +1110,14 @@ class App(tk.Tk):
             self._splash.set_progress(pct)
 
     def _run_update(self, url: str, ver: str = "") -> None:
-        self._set_update_status(f"새 버전 {ver} 다운로드 중…")
+        # 별도 업데이터 창(둥근 프리미엄 디자인)이 다운로드+설치를 한 창에서 진행한다.
+        self._set_update_status(f"새 버전 {ver} 업데이트 준비 중…")
+        target = sys.executable if getattr(sys, "frozen", False) else ""
+        if spawn_install_updater(url, ver, target):
+            self.after(300, self.destroy)   # 업데이터 창에 인계 → 본 앱 종료
+            return
 
+        # 폴백: 별도 창을 못 띄운 경우 기존 방식(본 창에서 다운로드 후 무인 설치)
         def prog(received, total):
             if total and total > 0:
                 pct = received * 100.0 / total
@@ -971,7 +1130,6 @@ class App(tk.Tk):
             try:
                 path = updater.download_installer(url, progress=prog)
             except Exception:  # noqa: BLE001
-                # 다운로드 실패: 로딩 중이면 그대로 앱을 띄우고, 아니면 상태만 표시(다음 실행 시 재시도)
                 def fail():
                     if getattr(self, "_splash", None):
                         self._finish_splash()
@@ -982,12 +1140,11 @@ class App(tk.Tk):
 
             def finish():
                 self._set_update_progress(100)
-                self._set_update_status("다운로드 100% — 설치 진행 창이 열립니다…")
+                self._set_update_status("설치 중…")
                 try:
-                    # /SILENT: 설치 진행률·파일 현황 창을 보여주며 자동 설치(질문 없음)
                     updater.launch_installer(path, silent=True)
                 finally:
-                    self.after(800, self.destroy)   # 설치 창에 인계 후 앱 종료
+                    self.after(800, self.destroy)
             self.after(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1166,7 +1323,7 @@ class App(tk.Tk):
             self._render_inventory()
             self.status.set(f"'{model}' 모델로 필터했습니다.")
         else:
-            messagebox.showinfo(
+            pmsg.showinfo(
                 "재고현황 조회 필요",
                 f"'{model}' (으)로 보려면 먼저 [재고현황 조회]를 눌러 조회하세요.\n"
                 "조회하면 이 모델명 필터가 자동 적용됩니다.")
@@ -1301,13 +1458,13 @@ class App(tk.Tk):
 
     def _on_fetch_wizfasta(self) -> None:
         if not getattr(self, "_inventory_display_all", []):
-            messagebox.showwarning(
+            pmsg.showwarning(
                 "재고 먼저 조회",
                 "먼저 ① 재고현황 탭에서 조회해 주세요.\n(EcountERP 모델명·입고단가가 있어야 비교됩니다.)")
             return
         corp, uid, pw = self.var_wcorp.get().strip(), self.var_wid.get().strip(), self.var_wpw.get()
         if not (corp and uid and pw):
-            messagebox.showwarning(
+            pmsg.showwarning(
                 "Wizfasta 로그인 정보 필요",
                 "[설정] → 'Wizfasta 로그인'에 업체코드·아이디·비밀번호를 입력해 주세요.")
             return
@@ -1377,7 +1534,7 @@ class App(tk.Tk):
         self.btn_wiz.configure(state="normal")
         self.btn_wiz_stop.configure(state="disabled")
         self.cmp_status.set("실패")
-        messagebox.showerror("Wizfasta 가져오기 실패", msg)
+        pmsg.showerror("Wizfasta 가져오기 실패", msg)
 
     def _wiz_done(self, wiz_rows: list[dict]) -> None:
         self.btn_wiz.configure(state="normal")
@@ -1386,7 +1543,7 @@ class App(tk.Tk):
         if not self._wiz_rows:
             self._stop_anim()
             self.cmp_status.set("Wizfasta 원가 0건 — 로그인/조회 상태를 확인하세요.")
-            messagebox.showwarning("데이터 없음", "Wizfasta에서 원가를 받지 못했습니다(0건).")
+            pmsg.showwarning("데이터 없음", "Wizfasta에서 원가를 받지 못했습니다(0건).")
             return
         self._set_step("match")
         ecount_data = [d for d in self._inventory_display_all]  # 모델명·입고단가 포함
@@ -1555,15 +1712,15 @@ class App(tk.Tk):
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(self._current_config(), f, ensure_ascii=False, indent=2)
         except OSError as exc:
-            messagebox.showerror("저장 실패", f"설정 저장 중 오류:\n{exc}")
+            pmsg.showerror("저장 실패", f"설정 저장 중 오류:\n{exc}")
             return
-        messagebox.showinfo("저장 완료", f"설정을 저장했습니다.\n{CONFIG_PATH}")
+        pmsg.showinfo("저장 완료", f"설정을 저장했습니다.\n{CONFIG_PATH}")
 
     # ================= 조회 실행 =================
     def _on_query(self) -> None:
         cfg = self._current_config()
         if not cfg["COM_CODE"] or not cfg["USER_ID"] or not cfg["API_CERT_KEY"]:
-            messagebox.showwarning("입력 필요", "회사코드 / 사용자ID / API 인증키를 모두 입력하세요.")
+            pmsg.showwarning("입력 필요", "회사코드 / 사용자ID / API 인증키를 모두 입력하세요.")
             return
         self._query_seq = getattr(self, "_query_seq", 0) + 1  # 새 조회 → 이전 백그라운드 가격조회 중단
         self.btn_query.configure(state="disabled")
@@ -1648,7 +1805,7 @@ class App(tk.Tk):
     def _query_failed(self, msg: str) -> None:
         self.btn_query.configure(state="normal")
         self.status.set("실패")
-        messagebox.showerror("조회 실패", msg)
+        pmsg.showerror("조회 실패", msg)
 
     def _query_done(self, data: dict, rows: list[dict],
                     all_display: list[dict], product_note: str = "") -> None:
@@ -1661,7 +1818,7 @@ class App(tk.Tk):
             fill_tree(self.tree_inv, [])
             self.status.set("완료 — 표시할 행 없음")
             self.btn_inv_csv.configure(state="normal")
-            messagebox.showinfo(
+            pmsg.showinfo(
                 "조회 완료",
                 "응답을 받았지만 재고 행을 자동으로 찾지 못했습니다.\n"
                 "'CSV 내보내기'로 원문 구조를 확인하세요.",
@@ -1685,7 +1842,7 @@ class App(tk.Tk):
         else:
             self._inv_status_suffix = "(품목명/입고단가 미적용: 창고별/품목 조회 API 권한 필요)"
             if product_note:
-                messagebox.showwarning(
+                pmsg.showwarning(
                     "재고 항목 일부 미연동",
                     "재고수량은 조회됐지만 브랜드/모델명/사이즈/입고일자·창고 정보를 채울 "
                     "품목명을 가져오지 못했습니다.\n\n"
@@ -1798,7 +1955,7 @@ class App(tk.Tk):
         """현재 표의 소계/평균 행만 (브랜드·모델명 포함) 엑셀로 내보낸다."""
         subs = [d for d in self._inventory_display if d.get("_subtotal")]
         if not subs:
-            messagebox.showwarning("데이터 없음", "내보낼 소계가 없습니다. 먼저 재고현황을 조회하세요.")
+            pmsg.showwarning("데이터 없음", "내보낼 소계가 없습니다. 먼저 재고현황을 조회하세요.")
             return
         rows = [{
             "브랜드": d.get("브랜드", ""),
@@ -1817,7 +1974,103 @@ class App(tk.Tk):
         self._render_inventory()
 
 
+def run_install_window(url: str, ver: str, target: str) -> None:
+    """별도 업데이터 창(실행 팝업과 동일한 둥근 프리미엄 디자인).
+
+    하나의 둥근 창에서 다운로드(0~60%) → 설치(60~100%)를 하단 진행률 바로 보여준다.
+    Inno 설치는 /VERYSILENT(설치 창 없음)로 실행하고, 완료되면 새 버전을 실행한다.
+    이 프로세스는 교체 대상 exe 가 아닌 임시 복사본이라 설치 중에도 살아 있다.
+    """
+    import subprocess
+    root = tk.Tk()
+    root.withdraw()
+    sp = Splash(root, status="업데이트 준비 중…")
+    st = {"installer": None, "installed": False, "failed": False}
+
+    def dl_prog(received, total):
+        if total and total > 0:
+            pct = received * 100.0 / total
+            root.after(0, lambda: (
+                sp.set_progress(pct * 0.6),   # 다운로드 = 0~60%
+                sp.set_status(f"새 버전 {ver} 다운로드 중… {int(pct)}% "
+                              f"({received / 1048576:.1f} / {total / 1048576:.1f} MB)")))
+
+    def worker():
+        try:
+            path = updater.download_installer(url, progress=dl_prog)
+        except Exception:  # noqa: BLE001
+            st["failed"] = True
+            return
+        st["installer"] = path
+        root.after(0, lambda: sp.set_status("설치 중… 파일을 적용하고 있습니다"))
+        try:
+            p = subprocess.Popen([path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+            p.wait()
+        except Exception:  # noqa: BLE001
+            st["failed"] = True
+            return
+        st["installed"] = True
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    prog = {"v": 0.0}
+
+    def tick():
+        if st["failed"]:
+            sp.set_status("업데이트 실패 — 다음 실행 시 다시 시도합니다")
+            root.after(1600, root.destroy)
+            return
+        if st["installed"]:
+            sp.set_progress(100)
+            sp.set_status("설치 완료 — 새 버전을 실행합니다…")
+            if target and os.path.exists(target):
+                try:
+                    os.startfile(target)  # noqa: S606
+                except Exception:  # noqa: BLE001
+                    pass
+            root.after(900, root.destroy)
+            return
+        if st["installer"]:        # 설치 단계: 60 → 97 부드럽게
+            prog["v"] = min(97.0, max(prog["v"], 60.0) + 1.4)
+            sp.set_progress(prog["v"])
+        root.after(170, tick)
+
+    root.after(300, tick)
+    root.mainloop()
+
+
+def spawn_install_updater(url: str, ver: str, target: str) -> bool:
+    """교체 대상이 아닌 임시 복사본으로 별도 업데이터 창을 띄운다.
+
+    frozen(.exe): 자기 자신을 %TEMP%\\PriceCheckUpdater.exe 로 복사해 실행
+                  (설치 시 taskkill 대상인 EcountInventory.exe 와 이름이 달라 살아남음).
+    dev(.py)    : python 으로 gui.py --install 실행.
+    성공 시 True.
+    """
+    import subprocess
+    import tempfile
+    import shutil
+    DETACHED = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    try:
+        if getattr(sys, "frozen", False):
+            tmp = os.path.join(tempfile.gettempdir(), "PriceCheckUpdater.exe")
+            shutil.copy2(sys.executable, tmp)
+            cmd = [tmp, "--install", url, ver, target]
+        else:
+            cmd = [sys.executable, os.path.abspath(__file__), "--install", url, ver, target]
+        subprocess.Popen(cmd, creationflags=DETACHED, close_fds=True)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def main() -> None:
+    if len(sys.argv) >= 2 and sys.argv[1] == "--install":
+        url = sys.argv[2] if len(sys.argv) > 2 else ""
+        ver = sys.argv[3] if len(sys.argv) > 3 else ""
+        target = sys.argv[4] if len(sys.argv) > 4 else ""
+        run_install_window(url, ver, target)
+        return
     App().mainloop()
 
 
