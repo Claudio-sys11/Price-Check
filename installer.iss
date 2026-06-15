@@ -7,7 +7,8 @@
 
 #define MyAppId "8F3C2A91-7B4D-4E26-9A1F-EC0A17E5C001"
 #define MyAppName "실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교"
-#define MyAppVersion "1.0.31"
+#define MyShortcutName "Price Check"
+#define MyAppVersion "1.0.32"
 #define MyAppPublisher "THE FEEL KOREA CO.,LTD."
 #define MyAppExeName "EcountInventory.exe"
 
@@ -24,7 +25,7 @@ VersionInfoProductName={#MyAppName}
 AppPublisher={#MyAppPublisher}
 AppCopyright=Copyright (C) THE FEEL KOREA CO.,LTD.
 DefaultDirName={autopf}\EcountInventory
-DefaultGroupName=실시간 재고 현황 및 평균 원가 비교
+DefaultGroupName={#MyShortcutName}
 DisableProgramGroupPage=yes
 OutputDir=installer
 OutputBaseFilename=EcountInventory_Setup_v{#MyAppVersion}
@@ -53,9 +54,9 @@ Source: "update.example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "data\wizfasta_products.json"; DestDir: "{app}\data"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#MyShortcutName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{cm:UninstallProgram,{#MyShortcutName}}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#MyShortcutName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 ; 일반(대화형) 설치: 마침 페이지의 체크박스로 실행

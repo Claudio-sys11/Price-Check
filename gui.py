@@ -515,12 +515,7 @@ class Splash(tk.Toplevel):
             tk.Label(logo_row, image=self._img_ec, bg="white").pack(side="left", padx=(0, 16))
             tk.Label(logo_row, text="×", bg="white", fg=ACCENT,
                      font=(FONT, 17, "bold")).pack(side="left", padx=(0, 16))
-            cw, ch = self._img_wz.width() + 32, self._img_wz.height() + 18
-            chip = tk.Canvas(logo_row, width=cw, height=ch, bg="white", highlightthickness=0)
-            chip.pack(side="left")
-            chip.create_polygon(_round_rect_points(1, 1, cw - 1, ch - 1, 14),
-                                fill="#2b2f3a", outline="", smooth=True)
-            chip.create_image(cw // 2, ch // 2, image=self._img_wz)
+            tk.Label(logo_row, image=self._img_wz, bg="white").pack(side="left")  # 흰 배경
         else:   # 이미지 로드 실패 시 텍스트 폴백
             tk.Label(logo_row, text="EcountERP  ×  Wizfasta", bg="white",
                      fg=ACCENT_ACTIVE, font=(FONT, 18, "bold")).pack()
@@ -909,7 +904,10 @@ class App(tk.Tk):
         def prog(received, total):
             if total and total > 0:
                 pct = received * 100.0 / total
-                self.after(0, lambda p=pct: self._set_update_progress(p))
+                msg = (f"새 버전 {ver} 다운로드 중… {int(pct)}% "
+                       f"({received / 1048576:.1f} / {total / 1048576:.1f} MB)")
+                self.after(0, lambda p=pct, m=msg: (
+                    self._set_update_progress(p), self._set_update_status(m)))
 
         def worker():
             try:
@@ -926,11 +924,12 @@ class App(tk.Tk):
 
             def finish():
                 self._set_update_progress(100)
-                self._set_update_status("설치 중 — 잠시 후 새 버전으로 재시작됩니다…")
+                self._set_update_status("다운로드 100% — 설치 진행 창이 열립니다…")
                 try:
-                    updater.launch_installer(path, silent=True)   # 무인 설치
+                    # /SILENT: 설치 진행률·파일 현황 창을 보여주며 자동 설치(질문 없음)
+                    updater.launch_installer(path, silent=True)
                 finally:
-                    self.after(600, self.destroy)   # 100% 표시를 잠깐 보여준 뒤 종료
+                    self.after(800, self.destroy)   # 설치 창에 인계 후 앱 종료
             self.after(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()

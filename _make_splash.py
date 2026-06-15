@@ -27,34 +27,26 @@ def ctext(y, txt, fnt, fill):
     d.text(((W - w) / 2, y), txt, font=fnt, fill=fill)
 
 
-# 로고 로드/리사이즈
+# 로고 로드/리사이즈 (둘 다 흰 배경 위에 배치)
 ec = Image.open("assets/ecount_logo.png").convert("RGBA")
 ec_h = 46
 ec = ec.resize((round(ec.width * ec_h / ec.height), ec_h), Image.LANCZOS)
-wz = Image.open("assets/wizfasta_logo.png").convert("RGBA")
-wz_h = 50
+wz = Image.open("assets/wizfasta_logo_light.png").convert("RGBA")   # 흰 배경용(리컬러)
+wz_h = 52
 wz = wz.resize((round(wz.width * wz_h / wz.height), wz_h), Image.LANCZOS)
 
-# 가로 배치 계산: [ec] (16) × (16) [chip]
+# 가로 배치 계산: [ec] (16) × (16) [wz]
 gap = 16
-chip_w, chip_h = wz.width + 34, wz.height + 20
 x_mark_w = int(d.textlength("×", font=font(22, True)))
-total = ec.width + gap + x_mark_w + gap + chip_w
+total = ec.width + gap + x_mark_w + gap + wz.width
 x = (W - total) // 2
 row_cy = 96
 
-# EcountERP 로고
 img.alpha_composite(ec, (x, row_cy - ec_h // 2))
 x += ec.width + gap
-# × 표시
 d.text((x, row_cy - 16), "×", font=font(22, True), fill=ACCENT)
 x += x_mark_w + gap
-# Wizfasta: 어두운 라운드 칩 + 로고
-chip = Image.new("RGBA", (chip_w, chip_h), (0, 0, 0, 0))
-cd = ImageDraw.Draw(chip)
-cd.rounded_rectangle([0, 0, chip_w - 1, chip_h - 1], radius=14, fill=DARKCHIP)
-chip.alpha_composite(wz, ((chip_w - wz.width) // 2, (chip_h - wz.height) // 2))
-img.alpha_composite(chip, (x, row_cy - chip_h // 2))
+img.alpha_composite(wz, (x, row_cy - wz.height // 2))
 
 ctext(150, f"v{version.APP_VERSION}  ·  THE FEEL KOREA CO.,LTD.", font(12), MUTED)
 ctext(196, "로딩 중…", font(13), ACCENT_DK)
