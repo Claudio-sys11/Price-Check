@@ -15,9 +15,21 @@ from __future__ import annotations
 
 import glob
 import os
+import subprocess
+import threading
 import time
 
 PRDDB_URL = "https://www.wizfasta.com/ProductMng/PrdDbList.aspx"
+LOGIN_URL = "https://www.wizfasta.com/Login/Login.aspx"
+
+
+def _kill_chromedriver() -> None:
+    """멈춘 chromedriver만 정리(사용자의 일반 Chrome 창은 건드리지 않음)."""
+    try:
+        subprocess.run(["taskkill", "/IM", "chromedriver.exe", "/F"],
+                       capture_output=True, timeout=10)
+    except Exception:
+        pass
 
 
 def _appdir(*parts) -> str:
@@ -151,6 +163,29 @@ def _make_driver(opts):
     raise RuntimeError("Chrome/chromedriver 시작 실패 — " + " / ".join(errors)[:300])
 
 
+def _make_driver_timeout(opts, timeout: int = 60):
+    """드라이버 생성을 timeout 초 안에 끝내지 못하면 종료(재시도 가능)."""
+    box = {}
+
+    def work():
+        try:
+            box["d"] = _make_driver(opts)
+        except Exception as e:  # noqa: BLE001
+            box["e"] = e
+
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    th.join(timeout)
+    if th.is_alive():
+        _kill_chromedriver()   # 멈춘 드라이버 정리
+        raise TimeoutError(
+            f"Chrome 시작이 {timeout}초 내에 완료되지 않았습니다. "
+            "[Wizfasta 원가 가져오기]를 다시 눌러 재시도하세요.")
+    if "e" in box:
+        raise box["e"]
+    return box["d"]
+
+
 # Wizfasta 셀러로그인 자동 입력 (필드: corpCode / txtUserId / txtUserPwd, 버튼 btnLogin)
 _LOGIN_JS = r"""
 var c=document.getElementById('corpCode'), u=document.getElementById('txtUserId'),
@@ -162,7 +197,8 @@ b.click(); return 'submitted';
 
 
 def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
-                         progress=None, headless: bool = True) -> list[dict]:
+                         progress=None, headless: bool = False,
+                         start_timeout: int = 60) -> list[dict]:
     """상품DB 전체 엑셀을 받아 모델명·원가를 추출(실패 시 그리드 폴백).
 
     corp/uid/pw 가 주어지면 Wizfasta에 자동 로그인한다. progress(step_key, detail)
@@ -207,8 +243,8 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
         "safebrowsing.enabled": True,
     })
 
-    step("start", "chromedriver 확보 중")
-    driver = _make_driver(opts)
+    step("start", "Chrome 창 여는 중 (chromedriver 확보)")
+    driver = _make_driver_timeout(opts, start_timeout)   # 60초 내 미시작 시 종료(재시도 가능)
     try:
         try:
             driver.execute_cdp_cmd("Page.setDownloadBehavior",
@@ -216,11 +252,12 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
         except Exception:
             pass
 
-        driver.get(PRDDB_URL)
-
-        # 로그인 처리: 로그인 페이지면 자동 로그인
+        # 로그인 화면으로 이동 후 자동 로그인
+        step("login", "로그인 화면 이동")
+        driver.get(LOGIN_URL)
+        time.sleep(1)
         if "login" in driver.current_url.lower():
-            step("login")
+            step("login", "자동 로그인 중")
             if not (corp and uid and pw):
                 raise RuntimeError("Wizfasta 로그인 정보가 없습니다. [설정]에서 입력하세요.")
             res = driver.execute_script(_LOGIN_JS, corp, uid, pw)

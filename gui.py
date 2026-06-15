@@ -237,11 +237,14 @@ class App(tk.Tk):
         nb.pack(fill="both", expand=True, padx=14, pady=(6, 12))
         self.tab_inv = ttk.Frame(nb, style="Tab.TFrame")
         self.tab_cmp = ttk.Frame(nb, style="Tab.TFrame")
+        self.tab_setup = ttk.Frame(nb, style="Tab.TFrame")
         nb.add(self.tab_inv, text="  재고현황 조회  ")
         nb.add(self.tab_cmp, text="  가격비교  ")
+        nb.add(self.tab_setup, text="  설치 현황  ")
 
         self._build_inventory_tab()
         self._build_compare_tab()
+        self._build_setup_tab()
         self._load_config()
 
         # 실행 시 백그라운드로 업데이트 확인
@@ -635,7 +638,7 @@ class App(tk.Tk):
             rows = wizfasta_selenium.fetch_wizfasta_costs(
                 corp, uid, pw,
                 progress=lambda key, detail="": self.after(0, lambda k=key, d=detail: self._set_step(k, d)),
-                headless=True)
+                headless=False, start_timeout=60)
         except Exception as exc:  # noqa: BLE001
             self.after(0, lambda: self._wiz_failed(f"Wizfasta 가져오기 실패: {exc}"))
             return
@@ -667,6 +670,79 @@ class App(tk.Tk):
         self._mark_all_done()
         self.cmp_status.set(
             f"완료 — Wiz {len(self._wiz_rows)}건 / 모델명 매칭 {matched} / 미매칭 {len(self._compare_rows) - matched}")
+
+    # ================= 탭3: 설치 현황 =================
+    def _build_setup_tab(self) -> None:
+        root = self.tab_setup
+        ttk.Label(root, text="이 프로그램 사용에 필요한 항목",
+                  font=(FONT, 13, "bold"), background=BG, foreground=TEXT
+                  ).pack(anchor="w", padx=18, pady=(16, 2))
+        ttk.Label(root, style="Muted.TLabel",
+                  text="설치 상태를 확인하고, 없으면 오른쪽 버튼(링크)으로 설치하세요."
+                  ).pack(anchor="w", padx=18, pady=(0, 10))
+
+        self._setup_items = [
+            {"name": "Google Chrome", "desc": "Wizfasta 원가 가져오기에 필요 (필수)",
+             "check": self._check_chrome, "btn": "Chrome 설치/다운로드",
+             "url": "https://www.google.com/chrome/"},
+            {"name": "chromedriver", "desc": "Chrome 자동 제어 드라이버",
+             "check": self._check_driver, "btn": None, "url": None},
+            {"name": f"이 프로그램 (v{APP_VERSION})", "desc": "최신 버전 확인 / 다운로드",
+             "check": self._check_app, "btn": "최신 릴리스 페이지",
+             "url": "https://github.com/Claudio-sys11/Price-Check/releases/latest"},
+        ]
+        self._setup_status = {}
+        box = ttk.Frame(root)
+        box.pack(fill="x", padx=18)
+        for it in self._setup_items:
+            row = ttk.LabelFrame(box, text=f" {it['name']} ")
+            row.pack(fill="x", pady=5, ipady=3)
+            ttk.Label(row, style="Muted.TLabel", text=it["desc"]).grid(
+                row=0, column=0, sticky="w", padx=10, pady=2)
+            st = ttk.Label(row, text="확인 중…", foreground=MUTED)
+            st.grid(row=1, column=0, sticky="w", padx=10, pady=2)
+            self._setup_status[it["name"]] = st
+            if it["btn"]:
+                ttk.Button(row, text=it["btn"],
+                           command=lambda u=it["url"]: self._open_url(u)).grid(
+                    row=0, column=1, rowspan=2, sticky="e", padx=10, pady=4)
+            row.columnconfigure(0, weight=1)
+
+        ttk.Button(root, text="🔄  다시 확인", style="Accent.TButton",
+                   command=self._check_requirements).pack(anchor="w", padx=18, pady=12)
+        self.after(300, self._check_requirements)
+
+    def _open_url(self, url: str | None) -> None:
+        import webbrowser
+        if url:
+            webbrowser.open(url)
+
+    def _check_chrome(self):
+        try:
+            from wizfasta_selenium import find_chrome
+            p = find_chrome()
+        except Exception:
+            p = None
+        if p:
+            return True, f"설치됨: {p}"
+        return False, "미설치 — 오른쪽 [Chrome 설치/다운로드] 로 설치하세요"
+
+    def _check_driver(self):
+        return True, "앱이 자동으로 설치·관리합니다 (별도 설치 불필요)"
+
+    def _check_app(self):
+        return True, f"현재 v{APP_VERSION} — 자동 업데이트 지원"
+
+    def _check_requirements(self) -> None:
+        for it in self._setup_items:
+            try:
+                ok, detail = it["check"]()
+            except Exception as exc:  # noqa: BLE001
+                ok, detail = False, f"확인 실패: {exc}"
+            st = self._setup_status[it["name"]]
+            icon = "✅" if ok else "❌"
+            st.configure(text=f"{icon}  {detail}",
+                         foreground=("#0d9488" if ok else "#dc2626"))
 
     # ================= 설정 =================
     def _load_config(self) -> None:
