@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import threading
 import time
 import tkinter as tk
@@ -26,6 +27,12 @@ from version import APP_VERSION
 
 APP_NAME = "EcountInventory"
 DEFAULT_GITHUB_REPO = "Claudio-sys11/Price-Check"   # 자동 업데이트 기본 저장소
+
+
+def resource_path(rel: str) -> str:
+    """PyInstaller 빌드/개발 환경 모두에서 번들 리소스 경로를 해결한다."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel)
 
 # ===== 디자인 팔레트 =====
 FONT = "Segoe UI"
@@ -167,6 +174,8 @@ def fill_tree(tree: ttk.Treeview, rows: list[dict],
         tree.column(h, width=w, anchor=anchor, stretch=False)
 
     tree.tag_configure("subtotal", background=SUBTOTAL_BG, font=(FONT, 10, "bold"))
+    tree.tag_configure("grandtotal", background="#9fe3d6", foreground="#0f3d36",
+                       font=(FONT, 10, "bold"))
     tree.tag_configure("odd", background=ROW_ALT)
     tree.tag_configure("even", background="white")
     # 가격비교 행 색상(정렬 그룹 구분): 단가차이 / 미매칭 / 동일
@@ -175,8 +184,10 @@ def fill_tree(tree: ttk.Treeview, rows: list[dict],
     tree.tag_configure("cmp_same", background="white")
     i = 0
     for r in rows:
-        if r.get("_subtotal"):
-            tags: tuple = ("subtotal",)
+        if r.get("_grand"):
+            tags: tuple = ("grandtotal",)
+        elif r.get("_subtotal"):
+            tags = ("subtotal",)
         elif r.get("_tag") == "diff":
             tags = ("cmp_diff",)
         elif r.get("_tag") == "unmatched":
@@ -463,13 +474,16 @@ export_rows_csv = export_rows_excel
 
 
 class Splash(tk.Toplevel):
-    """실행 시 표시되는 로딩 화면(브랜드 + 진행 상태 + 스피너)."""
+    """실행 시 표시되는 로딩 화면.
+
+    EcountERP·Wizfasta 로고를 배치하고, 업데이트 설치 시 진행률(0~100%)을 상태바로 표시.
+    """
 
     def __init__(self, parent, status: str = "로딩 중…"):
         super().__init__(parent)
         self.overrideredirect(True)
         self.configure(bg=ACCENT)
-        w, h = 500, 290
+        w, h = 520, 300
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
         try:
@@ -480,26 +494,59 @@ class Splash(tk.Toplevel):
         card = tk.Frame(self, bg="white")
         card.place(x=12, y=12, width=w - 24, height=h - 24)
         tk.Frame(card, bg=ACCENT, height=10).pack(fill="x")    # 상단 민트 띠
-        tk.Label(card, text="실시간 재고 현황", bg="white", fg=ACCENT_ACTIVE,
-                 font=(FONT, 19, "bold")).pack(pady=(38, 0))
-        tk.Label(card, text="(EcountERP) 및 평균 원가(Wizfasta) 비교", bg="white",
-                 fg=TEXT, font=(FONT, 11)).pack(pady=(4, 0))
-        tk.Label(card, text=f"v{APP_VERSION}  ·  THE FEEL KOREA CO.,LTD.", bg="white",
-                 fg=MUTED, font=(FONT, 9)).pack(pady=(10, 0))
 
+        # 로고 행: EcountERP(흰 배경) × Wizfasta(어두운 칩 — 흰/노랑 로고 가독성)
+        logo_row = tk.Frame(card, bg="white")
+        logo_row.pack(pady=(42, 0))
+        self._img_ec = None
+        self._img_wz = None
+        try:
+            self._img_ec = tk.PhotoImage(file=resource_path("assets/ecount_logo_splash.png"))
+            self._img_wz = tk.PhotoImage(file=resource_path("assets/wizfasta_logo_splash.png"))
+        except tk.TclError:
+            self._img_ec = self._img_wz = None
+
+        if self._img_ec is not None and self._img_wz is not None:
+            tk.Label(logo_row, image=self._img_ec, bg="white").pack(side="left", padx=(0, 16))
+            tk.Label(logo_row, text="×", bg="white", fg=ACCENT,
+                     font=(FONT, 17, "bold")).pack(side="left", padx=(0, 16))
+            cw, ch = self._img_wz.width() + 32, self._img_wz.height() + 18
+            chip = tk.Canvas(logo_row, width=cw, height=ch, bg="white", highlightthickness=0)
+            chip.pack(side="left")
+            chip.create_polygon(_round_rect_points(1, 1, cw - 1, ch - 1, 14),
+                                fill="#2b2f3a", outline="", smooth=True)
+            chip.create_image(cw // 2, ch // 2, image=self._img_wz)
+        else:   # 이미지 로드 실패 시 텍스트 폴백
+            tk.Label(logo_row, text="EcountERP  ×  Wizfasta", bg="white",
+                     fg=ACCENT_ACTIVE, font=(FONT, 18, "bold")).pack()
+
+        tk.Label(card, text=f"v{APP_VERSION}  ·  THE FEEL KOREA CO.,LTD.", bg="white",
+                 fg=MUTED, font=(FONT, 9)).pack(pady=(18, 0))
+
+        # 상태 + 스피너
         self._status = tk.StringVar(value=status)
         self._spin = tk.StringVar(value=SPINNER[0])
-        row = tk.Frame(card, bg="white")
-        row.pack(pady=(30, 0))
-        tk.Label(row, textvariable=self._spin, bg="white", fg=ACCENT,
-                 font=(FONT, 13, "bold")).pack(side="left", padx=(0, 8))
-        tk.Label(row, textvariable=self._status, bg="white", fg=SUBTLE,
+        srow = tk.Frame(card, bg="white")
+        srow.pack(pady=(18, 0))
+        tk.Label(srow, textvariable=self._spin, bg="white", fg=ACCENT,
+                 font=(FONT, 12, "bold")).pack(side="left", padx=(0, 8))
+        tk.Label(srow, textvariable=self._status, bg="white", fg=SUBTLE,
                  font=(FONT, 10)).pack(side="left")
+
+        # 진행률 바(설치/다운로드 시에만 표시)
+        self._pct = 0.0
+        self._show_bar = False
+        self._pctvar = tk.StringVar(value="")
+        self._bar_wrap = tk.Frame(card, bg="white")
+        self._barc = tk.Canvas(self._bar_wrap, width=360, height=14,
+                               bg="white", highlightthickness=0)
+        self._barc.pack(side="left")
+        tk.Label(self._bar_wrap, textvariable=self._pctvar, bg="white", fg=ACCENT_ACTIVE,
+                 font=(FONT, 10, "bold"), width=5, anchor="w").pack(side="left", padx=(8, 0))
 
         self._anim_on = True
         self._i = 0
         self._tick()
-        # 확실히 표시(환경에 따라 overrideredirect 창이 늦게 뜨는 경우 대비)
         try:
             self.update_idletasks()
             self.lift()
@@ -511,6 +558,33 @@ class Splash(tk.Toplevel):
             self._status.set(msg)
         except tk.TclError:
             pass
+
+    def set_progress(self, pct: float) -> None:
+        """진행률(0~100%)을 상태바로 표시한다."""
+        self._pct = max(0.0, min(100.0, float(pct)))
+        try:
+            self._pctvar.set(f"{int(round(self._pct))}%")
+        except tk.TclError:
+            return
+        if not self._show_bar:
+            self._show_bar = True
+            self._bar_wrap.pack(pady=(14, 0))
+        self._draw_bar()
+
+    def _draw_bar(self) -> None:
+        c = self._barc
+        try:
+            c.delete("all")
+        except tk.TclError:
+            return
+        bw, bh, r = 360, 14, 7
+        c.create_polygon(_round_rect_points(1, 1, bw - 1, bh - 1, r),
+                         fill="#e5e7eb", outline="", smooth=True)
+        fw = int(bw * self._pct / 100)
+        if fw >= 2:
+            rr = min(r, fw / 2)
+            c.create_polygon(_round_rect_points(1, 1, fw, bh - 1, rr),
+                             fill=ACCENT, outline="", smooth=True)
 
     def _tick(self) -> None:
         if not self._anim_on:
@@ -815,12 +889,21 @@ class App(tk.Tk):
             except Exception:  # noqa: BLE001
                 pass
 
+    def _set_update_progress(self, pct: float) -> None:
+        if getattr(self, "_splash", None):
+            self._splash.set_progress(pct)
+
     def _run_update(self, url: str, ver: str = "") -> None:
-        self._set_update_status(f"새 버전 {ver} 자동 설치 중… (다운로드)")
+        self._set_update_status(f"새 버전 {ver} 다운로드 중…")
+
+        def prog(received, total):
+            if total and total > 0:
+                pct = received * 100.0 / total
+                self.after(0, lambda p=pct: self._set_update_progress(p))
 
         def worker():
             try:
-                path = updater.download_installer(url)
+                path = updater.download_installer(url, progress=prog)
             except Exception:  # noqa: BLE001
                 # 다운로드 실패: 로딩 중이면 그대로 앱을 띄우고, 아니면 상태만 표시(다음 실행 시 재시도)
                 def fail():
@@ -832,10 +915,12 @@ class App(tk.Tk):
                 return
 
             def finish():
+                self._set_update_progress(100)
+                self._set_update_status("설치 중 — 잠시 후 새 버전으로 재시작됩니다…")
                 try:
                     updater.launch_installer(path, silent=True)   # 무인 설치
                 finally:
-                    self.destroy()   # 앱 종료 → 설치파일이 교체 후 자동 재실행
+                    self.after(600, self.destroy)   # 100% 표시를 잠깐 보여준 뒤 종료
             self.after(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -914,15 +999,31 @@ class App(tk.Tk):
         root = self.tab_cmp
         self._wiz_rows: list[dict] = []
 
-        ttk.Label(root, style="Muted.TLabel",
-                  text="① 재고현황 탭에서 조회 후 → ② [Wizfasta 원가 가져오기]로 상품DB 원가를 받아 모델명으로 "
-                       "비교합니다. EcountERP 값은 재고현황 소계의 '평균원가'(모델별 가중평균)를 사용합니다. "
-                       "(60초 초과 시 자동 재시작 / [중단]으로 멈춤)\n"
-                       "※ 표에서 행을 선택해 Ctrl+C, 또는 우클릭 메뉴(셀/행/전체 복사)·더블클릭(셀 복사)으로 복사할 수 있습니다."
-                  ).pack(fill="x", padx=16, pady=(12, 2))
+        # 상단: 좌(안내·버튼·칩) / 우(진행 상황 — 우측 상단, 내용에 맞춘 크기)
+        top = ttk.Frame(root)
+        top.pack(fill="x", padx=16, pady=(12, 2))
 
-        btns = ttk.Frame(root)
-        btns.pack(fill="x", padx=16, pady=(4, 6))
+        chk = ttk.LabelFrame(top, text=" 진행 상황 ")
+        chk.pack(side="right", anchor="n", padx=(14, 0))
+        self._step_labels = {}
+        for key, label in WIZ_STEPS:
+            lb = ttk.Label(chk, text=f"⬜  {label}", style="Muted.TLabel")
+            lb.pack(anchor="w", padx=10, pady=1)
+            self._step_labels[key] = (lb, label)
+
+        left = ttk.Frame(top)
+        left.pack(side="left", fill="both", expand=True)
+
+        ttk.Label(left, style="Muted.TLabel", justify="left",
+                  text="① 재고현황 탭에서 조회 후 → ② [Wizfasta 원가 가져오기]로 상품DB 원가를 받아 모델명으로 비교합니다.\n"
+                       "EcountERP 값은 재고현황 소계의 '평균원가'(모델별 가중평균)를 사용합니다. "
+                       "(60초 초과 시 자동 재시작 / [중단]으로 멈춤)\n"
+                       "※ 모델명을 더블클릭하면 재고현황 탭에서 해당 모델로 조회합니다. "
+                       "행 선택 후 Ctrl+C·우클릭(셀/행/전체)으로 복사할 수 있습니다."
+                  ).pack(anchor="w", pady=(0, 4))
+
+        btns = ttk.Frame(left)
+        btns.pack(fill="x", pady=(2, 4))
         self.btn_wiz = accent_button(btns, "🛒  Wizfasta 원가 가져오기", self._on_fetch_wizfasta)
         self.btn_wiz.pack(side="left")
         self.btn_wiz_stop = RoundedButton(
@@ -941,11 +1042,11 @@ class App(tk.Tk):
         )
         ttk.Label(btns, textvariable=self.cmp_status, style="Status.TLabel").pack(side="right")
 
-        # 결과 요약(둥근 통계 칩) — 완료 시 건수를 크게, 우측 끝에 표시
-        self.cmp_summary = tk.Frame(root, bg=BG)
-        self.cmp_summary.pack(fill="x", padx=16, pady=(2, 4))
+        # 결과 요약(둥근 통계 칩) — 좌측 영역 안에서 우측 정렬
+        self.cmp_summary = tk.Frame(left, bg=BG)
+        self.cmp_summary.pack(fill="x", pady=(2, 0))
         chip_box = tk.Frame(self.cmp_summary, bg=BG)
-        chip_box.pack(side="right")   # 우측 끝 정렬
+        chip_box.pack(side="right")
         self.chip_total = StatChip(chip_box, "전체 (Wiz)", fill="#e0f7f1", fg="#0f766e")
         self.chip_diff = StatChip(chip_box, "단가차이", fill=DIFF_BG, fg=DIFF_FG)
         self.chip_unmatch = StatChip(chip_box, "미매칭", fill=UNMATCH_BG, fg="#4b5563")
@@ -953,17 +1054,8 @@ class App(tk.Tk):
         for c in (self.chip_total, self.chip_diff, self.chip_unmatch, self.chip_same):
             c.pack(side="left", padx=(10, 0))
 
-        # 진행 체크리스트
-        chk = ttk.LabelFrame(root, text=" 진행 상황 ")
-        chk.pack(fill="x", padx=16, pady=(0, 6))
-        self._step_labels = {}
-        for key, label in WIZ_STEPS:
-            lb = ttk.Label(chk, text=f"⬜  {label}", style="Muted.TLabel")
-            lb.pack(anchor="w", padx=10, pady=1)
-            self._step_labels[key] = (lb, label)
-
         tf = tk.Frame(root, bg=BORDER)
-        tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
+        tf.pack(fill="both", expand=True, padx=16, pady=(6, 14))
         self.tree_cmp = ttk.Treeview(tf, show="headings")
         ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_cmp.yview)
         xsb = ttk.Scrollbar(tf, orient="horizontal", command=self.tree_cmp.xview)
@@ -974,6 +1066,43 @@ class App(tk.Tk):
         tf.rowconfigure(0, weight=1)
         tf.columnconfigure(0, weight=1)
         self._enable_tree_copy(self.tree_cmp, self.cmp_status)
+        # 모델명 더블클릭 → 재고현황 탭으로 이동·조회 (다른 셀 더블클릭은 셀 복사)
+        self.tree_cmp.bind("<Double-1>", self._on_cmp_double)
+
+    def _on_cmp_double(self, event) -> None:
+        """가격비교 표 더블클릭: 모델명 열이면 재고현황 조회, 그 외 열은 셀 복사."""
+        tree = self.tree_cmp
+        row = tree.identify_row(event.y)
+        col = tree.identify_column(event.x)
+        if not row:
+            return
+        cols = list(tree["columns"])
+        try:
+            idx = int(str(col).replace("#", "")) - 1
+        except ValueError:
+            idx = -1
+        colname = cols[idx] if 0 <= idx < len(cols) else ""
+        model = tree.set(row, "모델명") if "모델명" in cols else ""
+        if colname == "모델명" and model:
+            self._goto_inventory_for_model(model)
+        else:
+            tree._ctx_cell = (row, col)
+            self._copy_cell(tree)
+
+    def _goto_inventory_for_model(self, model: str) -> None:
+        """재고현황 조회 탭으로 전환하고 해당 모델명으로 필터(조회)한다."""
+        self._tabbar.select("inv")
+        self._switch_tab("inv")
+        self.var_brand.set("")
+        self.var_model.set(model)
+        if getattr(self, "_inventory_display_all", []):
+            self._render_inventory()
+            self.status.set(f"'{model}' 모델로 필터했습니다.")
+        else:
+            messagebox.showinfo(
+                "재고현황 조회 필요",
+                f"'{model}' (으)로 보려면 먼저 [재고현황 조회]를 눌러 조회하세요.\n"
+                "조회하면 이 모델명 필터가 자동 적용됩니다.")
 
     # ---- 표 복사 기능(우클릭/Ctrl+C/더블클릭) ----
     def _enable_tree_copy(self, tree: ttk.Treeview, status_var: tk.StringVar) -> None:
@@ -1507,11 +1636,24 @@ class App(tk.Tk):
         allrows = getattr(self, "_inventory_display_all", [])
         bf = self.var_brand.get().strip().lower()
         mf = self.var_model.get().strip().lower()
-        filtered = [
-            d for d in allrows
-            if (not bf or bf in str(d.get("브랜드", "")).lower())
-            and (not mf or mf in str(d.get("모델명", "")).lower())
-        ]
+        mf_norm = cmp.normalize_model(mf) if mf else ""   # 정규화 매칭(가격비교 모델명 대응)
+
+        def _match(d):
+            if bf and bf not in str(d.get("브랜드", "")).lower():
+                return False
+            if mf:
+                model = str(d.get("모델명", ""))
+                if mf in model.lower():
+                    return True
+                if mf_norm:
+                    mn = cmp.normalize_model(model)
+                    # 양방향 부분일치(가격비교 모델명에 브랜드 접두가 붙는 경우 대응)
+                    if mn and (mf_norm in mn or mn in mf_norm):
+                        return True
+                return False
+            return True
+
+        filtered = [d for d in allrows if _match(d)]
         if self._sort_col:   # 헤더 클릭 정렬(오름/내림)
             col = self._sort_col
             if col == "사이즈":
@@ -1528,7 +1670,11 @@ class App(tk.Tk):
                 str(d.get("품목코드", "")),
                 str(d.get("창고코드", "")),
             ))
-        self._inventory_display = cmp.add_subtotals(filtered)
+        rows = cmp.add_subtotals(filtered)
+        # 브랜드/모델명으로 검색(필터) 중이면, 검색 결과 전체의 합계·평균 행을 맨 아래에 추가
+        if (bf or mf) and filtered:
+            rows = rows + [self._grand_total_row(filtered)]
+        self._inventory_display = rows
         fill_tree(self.tree_inv, self._inventory_display,
                   sort_callback=self._on_sort_column,
                   sort_col=self._sort_col, sort_desc=self._sort_desc)
@@ -1540,6 +1686,29 @@ class App(tk.Tk):
             self.status.set(f"완료 — {total}건 {suffix}".rstrip())
         else:
             self.status.set(f"필터 {shown}건 / 전체 {total}건 {suffix}".rstrip())
+
+    def _grand_total_row(self, filtered: list[dict]) -> dict:
+        """검색(필터) 결과 전체의 합계·평균을 담은 행을 만든다."""
+        cols = [k for k in filtered[0].keys() if not k.startswith("_")]
+        sum_qty = sum(cmp._to_number(r.get("재고수량")) for r in filtered)
+        sum_total = sum(cmp._to_number(r.get("총단가")) for r in filtered)
+        if sum_qty:
+            avg = sum_total / sum_qty
+        else:
+            prices = [cmp._to_number(r.get("입고단가")) for r in filtered]
+            avg = (sum(prices) / len(prices)) if prices else 0
+        g = {k: "" for k in cols}
+        if "브랜드" in g:
+            g["브랜드"] = "■ 검색 합계/평균"
+        label_col = "창고명" if "창고명" in g else "사이즈"
+        if label_col in g:
+            g[label_col] = f"{len(filtered)}건"
+        g["재고수량"] = int(sum_qty)
+        g["입고단가"] = f"{int(round(avg)):,}"     # 평균단가
+        g["총단가"] = f"{int(round(sum_total)):,}"
+        g["_subtotal"] = True
+        g["_grand"] = True
+        return g
 
     def _on_filter_change(self, event=None) -> None:
         """조회조건(브랜드/모델명) 변경 시: 이미 받아온 데이터에서 즉시 재필터(재조회 없음)."""
