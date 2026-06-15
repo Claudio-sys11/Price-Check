@@ -27,6 +27,32 @@ def _appdir(*parts) -> str:
     return path
 
 
+def find_chrome() -> str | None:
+    """설치된 컴퓨터의 Chrome 실행파일 경로를 찾는다(표준 경로 → 레지스트리)."""
+    cands = [
+        os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+    ]
+    for c in cands:
+        if c and os.path.exists(c):
+            return c
+    try:
+        import winreg
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                k = winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe")
+                val, _ = winreg.QueryValueEx(k, None)
+                if val and os.path.exists(val):
+                    return val
+            except OSError:
+                pass
+    except Exception:
+        pass
+    import shutil
+    return shutil.which("chrome")
+
+
 # 필터(일반상품·재고≥1·500개씩) 설정 + 조회
 _SETUP_JS = r"""
 var setSel=function(name,val){var s=Array.prototype.find.call(document.querySelectorAll('select'),
@@ -135,10 +161,18 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
         except OSError:
             pass
 
+    chrome_bin = find_chrome()
+    if not chrome_bin:
+        raise RuntimeError("이 컴퓨터에서 Chrome을 찾지 못했습니다. Chrome을 설치해 주세요.")
+
     opts = Options()
-    opts.add_argument(f"--user-data-dir={_appdir('wizfasta_chrome')}")
+    opts.binary_location = chrome_bin   # 설치된 컴퓨터의 Chrome 사용
+    # 고정 프로필(user-data-dir)은 잠금으로 멈출 수 있어 사용하지 않음 → 매번 임시 프로필 + 자동 로그인
     opts.add_argument("--no-first-run")
     opts.add_argument("--no-default-browser-check")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1280,900")
     if headless:
         opts.add_argument("--headless=new")
@@ -151,8 +185,11 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
         "safebrowsing.enabled": True,
     })
 
-    step("start")
-    driver = webdriver.Chrome(options=opts)
+    step("start", "Chrome 연결 중")
+    try:
+        driver = webdriver.Chrome(options=opts)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Chrome 시작 실패: {exc}") from exc
     try:
         try:
             driver.execute_cdp_cmd("Page.setDownloadBehavior",
