@@ -82,34 +82,22 @@ python -m PyInstaller --noconfirm --onefile --windowed --name EcountInventory --
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 ```
 
-## 가격비교 (Wizfasta ↔ EcountERP)
+## 가격비교 (Wizfasta 원가 ↔ EcountERP 입고단가)
 
-Wizfasta 스토어팜 판매상품과 EcountERP 재고현황을 **품목코드 기준**으로 결합해 비교합니다.
+EcountERP 재고현황(모델명·입고단가)과 Wizfasta 상품DB(모델명·원가)를 **모델명 기준**으로 비교합니다.
 
-### 데이터 키
+### 동작 (Selenium으로 Chrome 자동화)
 
-| 구분 | 키 필드 |
-|---|---|
-| Wizfasta | 품목코드 (`Mpm_Pr_Cd`) — 한 품목코드에 여러 판매상품이 매핑될 수 있음(1:N) |
-| EcountERP | 품목코드 (`PROD_CD` 등 — 자동 감지/매핑) |
+1. **재고현황 탭에서 조회** (EcountERP 모델명·입고단가 확보)
+2. **가격비교 탭 → [Wizfasta 원가 가져오기 (Chrome)]**:
+   - 앱 전용 Chrome 프로필로 Chrome이 열림 → **Wizfasta에 최초 1회 로그인**(이후 세션 유지)
+   - 상품DB에서 **등록유형=일반상품, 재고수량≥1, 500개씩** 자동 조회 → 모델명·원가 추출
+3. **모델명 정규화 매칭**(대문자화·'하자' 접두 제거·공백/기호 제거)으로 EcountERP 입고단가와 결합
 
-> EcountERP 재고 응답의 필드명(품목코드/재고수량/단가)은 자동 감지되며,
-> 필요 시 `config.json` 의 `ecount_fields` 로 정확히 지정할 수 있습니다.
+결과 컬럼: **브랜드 / 모델명 / Wiz_원가 / Ecount_입고단가 / 원가-입고단가차이 / 재고(Wiz) / 매칭**
 
-### ① Wizfasta 데이터 추출 (브라우저)
-
-1. Wizfasta 로그인 → [상품관리 > 판매상품등록]
-2. 쇼핑몰 선택=**스토어팜**, 등록유형=**일반상품** → [조회]
-3. F12 개발자도구 > Console 에 `wizfasta_extract.js` 내용을 붙여넣고 실행
-4. `wizfasta_products.json` 다운로드 → 프로그램의 `data/` 폴더에 배치
-
-### ② 비교 실행
-
-- **GUI**: 앱 실행 → ①탭에서 재고현황 조회 → ②탭에서 Wizfasta JSON 지정 후 [가격비교 실행]
-- **CLI**: `python compare.py` (사전에 `python main.py` 로 `output/inventory_raw.json` 생성)
-
-결과 컬럼: 품목코드 / 브랜드 / 모델명 / 판매상품명 / Wiz_원가 / Wiz_기준판매가 / Wiz_판매가 /
-Wiz_수수료율 / Ecount_재고수량 / Ecount_단가 / 원가-단가차이 / 매칭여부
+> Chrome이 설치돼 있어야 하며, chromedriver는 Selenium이 자동으로 받습니다.
+> 앱 전용 Wizfasta 로그인 세션은 `%APPDATA%\EcountInventory\wizfasta_chrome` 에 저장됩니다.
 
 ## 자동 업데이트 (실행 시 버전 체크)
 

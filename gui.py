@@ -41,7 +41,7 @@ ROW_ALT = "#f5fbf9"     # 표 줄무늬(홀수행, 민트 기운)
 SUBTOTAL_BG = "#d7f5ed"  # 소계 행 강조(민트)
 SELECT_BG = "#a7e8da"   # 표 선택행(민트)
 
-MONEY_COLS = {"입고단가", "총단가"}   # 우측정렬할 금액 컬럼
+MONEY_COLS = {"입고단가", "총단가", "Wiz_원가", "Ecount_입고단가", "원가-입고단가차이"}  # 우측정렬 금액 컬럼
 
 
 def app_data_dir() -> str:
@@ -458,30 +458,25 @@ class App(tk.Tk):
 
     # ================= 탭2: 가격비교 =================
     def _build_compare_tab(self) -> None:
-        pad = {"padx": 6, "pady": 4}
         root = self.tab_cmp
+        self._wiz_rows: list[dict] = []
 
-        top = ttk.LabelFrame(root, text=" Wizfasta 판매상품 데이터 ")
-        top.pack(fill="x", padx=16, pady=(12, 6), ipady=4)
-        self.var_wiz_path = tk.StringVar(value=self._default_wiz_path())
-        ttk.Label(top, text="JSON 파일").grid(row=0, column=0, sticky="e", **pad)
-        ttk.Entry(top, textvariable=self.var_wiz_path, width=70).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Button(top, text="찾아보기", command=self._browse_wiz).grid(row=0, column=2, **pad)
-        ttk.Label(
-            top, style="Muted.TLabel",
-            text="※ Wizfasta [상품관리>판매상품등록]에서 wizfasta_extract.js 로 추출한 파일을 지정하세요.",
-        ).grid(row=1, column=0, columnspan=3, sticky="w", **pad)
+        ttk.Label(root, style="Muted.TLabel",
+                  text="① 재고현황 탭에서 조회 후 → ② [Wizfasta 원가 가져오기]로 Chrome에서 상품DB 원가를 받아 "
+                       "모델명으로 비교합니다. (Wizfasta 최초 1회 로그인 필요)"
+                  ).pack(fill="x", padx=16, pady=(12, 2))
 
         btns = ttk.Frame(root)
-        btns.pack(fill="x", padx=16, pady=(2, 6))
-        ttk.Button(btns, text="가격비교 실행", style="Accent.TButton",
-                   command=self._on_compare).pack(side="left")
+        btns.pack(fill="x", padx=16, pady=(4, 6))
+        self.btn_wiz = ttk.Button(btns, text="🛒  Wizfasta 원가 가져오기 (Chrome)",
+                                  style="Accent.TButton", command=self._on_fetch_wizfasta)
+        self.btn_wiz.pack(side="left")
         self.btn_cmp_csv = ttk.Button(btns, text="비교결과 CSV 내보내기",
                                       command=lambda: export_rows_csv(self._compare_rows, "price_compare.csv"),
                                       state="disabled")
         self.btn_cmp_csv.pack(side="left", padx=8)
         self.cmp_status = tk.StringVar(
-            value="먼저 재고현황 탭에서 조회한 뒤, Wizfasta JSON 을 지정하고 실행하세요."
+            value="먼저 재고현황 탭에서 조회한 뒤, Wizfasta 원가 가져오기를 누르세요."
         )
         ttk.Label(btns, textvariable=self.cmp_status, style="Status.TLabel").pack(side="right")
 
@@ -497,51 +492,50 @@ class App(tk.Tk):
         tf.rowconfigure(0, weight=1)
         tf.columnconfigure(0, weight=1)
 
-    def _default_wiz_path(self) -> str:
-        for p in ("data/wizfasta_products.json",
-                  os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "wizfasta_products.json")):
-            if os.path.exists(p):
-                return os.path.abspath(p)
-        return ""
+    def _on_fetch_wizfasta(self) -> None:
+        if not getattr(self, "_inventory_display_all", []):
+            messagebox.showwarning(
+                "재고 먼저 조회",
+                "먼저 ① 재고현황 탭에서 조회해 주세요.\n(EcountERP 모델명·입고단가가 있어야 비교됩니다.)")
+            return
+        self.btn_wiz.configure(state="disabled")
+        self.btn_cmp_csv.configure(state="disabled")
+        self.cmp_status.set("Wizfasta Chrome 시작 중…")
+        threading.Thread(target=self._do_fetch_wizfasta, daemon=True).start()
 
-    def _browse_wiz(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Wizfasta JSON 선택",
-            filetypes=[("JSON 파일", "*.json"), ("모든 파일", "*.*")],
-        )
-        if path:
-            self.var_wiz_path.set(path)
-
-    def _on_compare(self) -> None:
-        if not self._inventory_rows:
-            if not messagebox.askyesno(
-                "재고 데이터 없음",
-                "①탭에서 재고현황을 먼저 조회하지 않았습니다.\n"
-                "EcountERP 재고 없이 (미매칭으로) 비교를 진행할까요?",
-            ):
-                return
-        wiz_path = self.var_wiz_path.get().strip()
-        if not wiz_path or not os.path.exists(wiz_path):
-            messagebox.showwarning("파일 필요", "유효한 Wizfasta JSON 파일을 지정하세요.")
+    def _do_fetch_wizfasta(self) -> None:
+        try:
+            import wizfasta_selenium
+        except Exception as exc:  # noqa: BLE001
+            self.after(0, lambda: self._wiz_failed(f"Selenium 모듈 로드 실패: {exc}"))
             return
         try:
-            summary = cmp.compare(
-                wizfasta_path=wiz_path,
-                ecount_rows=self._inventory_rows,
-                ecount_raw_path=None,
-                out_csv=os.path.join(app_data_dir(), "price_compare.csv"),
-            )
+            rows = wizfasta_selenium.fetch_wizfasta_costs(
+                progress=lambda m: self.after(0, lambda m=m: self.cmp_status.set(m)))
         except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("비교 실패", str(exc))
+            self.after(0, lambda: self._wiz_failed(f"Wizfasta 가져오기 실패: {exc}"))
             return
+        self.after(0, lambda: self._wiz_done(rows))
 
-        self._compare_rows = summary["rows"]
+    def _wiz_failed(self, msg: str) -> None:
+        self.btn_wiz.configure(state="normal")
+        self.cmp_status.set("실패")
+        messagebox.showerror("Wizfasta 가져오기 실패", msg)
+
+    def _wiz_done(self, wiz_rows: list[dict]) -> None:
+        self.btn_wiz.configure(state="normal")
+        self._wiz_rows = wiz_rows or []
+        if not self._wiz_rows:
+            self.cmp_status.set("Wizfasta 원가 0건 — 로그인/조회 상태를 확인하세요.")
+            messagebox.showwarning("데이터 없음", "Wizfasta에서 원가를 받지 못했습니다(0건).")
+            return
+        ecount_data = [d for d in self._inventory_display_all]  # 모델명·입고단가 포함
+        self._compare_rows = cmp.build_cost_comparison(self._wiz_rows, ecount_data)
         fill_tree(self.tree_cmp, self._compare_rows)
         self.btn_cmp_csv.configure(state="normal")
+        matched = sum(1 for r in self._compare_rows if r.get("매칭") == "O")
         self.cmp_status.set(
-            f"완료 — Wiz {summary['wizfasta_count']}건 / 매칭 {summary['matched']} / "
-            f"미매칭 {summary['unmatched']} (필드: {summary['ecount_fields']})"
-        )
+            f"완료 — Wiz {len(self._wiz_rows)}건 / 모델명 매칭 {matched} / 미매칭 {len(self._compare_rows) - matched}")
 
     # ================= 설정 =================
     def _load_config(self) -> None:

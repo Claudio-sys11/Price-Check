@@ -128,6 +128,59 @@ def build_inventory_display(
     return out
 
 
+def normalize_model(s: Any) -> str:
+    """모델명 정규화: 대문자화, '하자' 접두 제거, 공백/하이픈/언더스코어 제거.
+
+    Wizfasta 상품DB 모델명(예: '하자 S35UI0435 P4745 T8013')과
+    EcountERP 품목명에서 분해한 모델명을 같은 기준으로 비교하기 위함.
+    """
+    t = str(s or "").upper().strip()
+    t = re.sub(r"^하자\s*", "", t)
+    t = re.sub(r"[\s\-_/]+", "", t)
+    return t
+
+
+def build_cost_comparison(
+    wizfasta_rows: list[dict[str, Any]],
+    ecount_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Wizfasta 상품DB(모델명·원가)와 EcountERP 재고(모델명·입고단가)를 모델명으로 매칭.
+
+    wizfasta_rows: [{모델명, 브랜드, 원가, 재고}, ...]
+    ecount_rows  : 재고현황 표시 데이터 행(모델명·입고단가 포함, 소계 제외)
+    반환: 브랜드 | 모델명 | Wiz_원가 | Ecount_입고단가 | 원가-입고단가차이 | 재고(Wiz) | 매칭
+    """
+    # EcountERP: 정규화 모델명 -> 입고단가(0 아닌 값 우선)
+    ec_map: dict[str, float] = {}
+    for e in ecount_rows:
+        if e.get("_subtotal"):
+            continue
+        k = normalize_model(e.get("모델명"))
+        if not k:
+            continue
+        price = _to_number(e.get("입고단가"))
+        if k not in ec_map or (ec_map[k] == 0 and price):
+            ec_map[k] = price
+
+    out = []
+    for w in wizfasta_rows:
+        k = normalize_model(w.get("모델명"))
+        wiz_cost = _to_number(w.get("원가"))
+        ec_price = ec_map.get(k)
+        matched = ec_price is not None
+        diff = (wiz_cost - ec_price) if matched else None
+        out.append({
+            "브랜드": w.get("브랜드", ""),
+            "모델명": w.get("모델명", ""),
+            "Wiz_원가": f"{int(round(wiz_cost)):,}",
+            "Ecount_입고단가": (f"{int(round(ec_price)):,}" if matched else ""),
+            "원가-입고단가차이": (f"{int(round(diff)):,}" if diff is not None else ""),
+            "재고(Wiz)": w.get("재고", ""),
+            "매칭": "O" if matched else "X",
+        })
+    return out
+
+
 def add_subtotals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """같은 (브랜드, 모델명) 그룹마다 하단에 중간합계(평균 단가) 행을 삽입한다.
 
