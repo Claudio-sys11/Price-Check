@@ -83,7 +83,7 @@ UNMATCH_BG = "#eef1f4"         # 가격비교: 미매칭 행
 UNMATCH_FG = "#6b7280"
 
 MONEY_COLS = {"입고단가", "총단가",
-              "원가(W)", "평균원가(ERP)", "차이",
+              "파스타원가", "평균원가(ERP)", "차이",
               "파스타재고", "실재고(ERP)", "재고차이"}  # 우측정렬(금액·수량) 컬럼
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # 실시간 활동 스피너
@@ -1484,7 +1484,7 @@ class App(tk.Tk):
                 if not k.startswith("_") and k not in headers:
                     headers.append(k)
         if not headers:
-            headers = ["브랜드", "모델명", "원가(W)", "평균원가(ERP)", "차이",
+            headers = ["브랜드", "모델명", "파스타원가", "평균원가(ERP)", "차이",
                        "파스타재고", "실재고(ERP)", "재고차이", "매칭", "비고"]
         self._cmp_headers = headers
         data = [[r.get(h, "") for h in headers] for r in rows]
@@ -1509,10 +1509,18 @@ class App(tk.Tk):
                 sh.align_columns(columns=money_cols, align="e", redraw=False)
             except Exception:  # noqa: BLE001
                 pass
-        try:
-            sh.set_all_cell_sizes_to_text(redraw=False)
-        except Exception:  # noqa: BLE001
-            pass
+        # 각 칸을 머리글·내용 중 넓은 쪽에 맞춰 자동 폭 조정(전부 보이게)
+        fnt = tkfont.Font(family=FONT, size=10)
+        fnt_b = tkfont.Font(family=FONT, size=10, weight="bold")
+        for ci, h in enumerate(headers):
+            w = fnt_b.measure(str(h))
+            for r in rows:
+                w = max(w, fnt.measure(str(r.get(h, ""))))
+            w = min(max(w + 30, 64), 460)   # 여백 + 최소/최대 제한
+            try:
+                sh.column_width(column=ci, width=w, redraw=False)
+            except Exception:  # noqa: BLE001
+                pass
         sh.redraw()
 
     def _goto_inventory_for_model(self, model: str) -> None:

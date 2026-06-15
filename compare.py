@@ -156,7 +156,7 @@ def build_cost_comparison(
     모델명이 다른 쪽에 포함되면 같은 상품으로 인식한다(브랜드/색상 접두가 붙는 Wizfasta
     모델명 대응). 오인식 방지를 위해 포함되는 쪽 길이가 5자 이상일 때만 매칭한다.
 
-    반환: 브랜드 | 모델명 | 원가(W) | 평균원가(ERP) | 차이
+    반환: 브랜드 | 모델명 | 파스타원가 | 평균원가(ERP) | 차이
           | 파스타재고 | 실재고(ERP) | 재고차이 | 매칭 | 비고
     ERP 실재고가 없는(매칭 X 또는 재고 0) 행은 비고="미입고 상품"으로 표기한다.
     """
@@ -233,7 +233,7 @@ def build_cost_comparison(
             "_tag": tag,
             "브랜드": w.get("브랜드", ""),
             "모델명": w.get("모델명", ""),
-            "원가(W)": f"{int(round(wiz_cost)):,}",
+            "파스타원가": f"{int(round(wiz_cost)):,}",
             "평균원가(ERP)": (f"{int(round(ec_price)):,}" if matched else ""),
             "차이": (f"{int(round(diff)):,}" if diff is not None else ""),
             "파스타재고": f"{int(round(wiz_qty)):,}",
