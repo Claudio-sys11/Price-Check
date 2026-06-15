@@ -25,6 +25,7 @@ import updater
 from version import APP_VERSION
 
 APP_NAME = "EcountInventory"
+DEFAULT_GITHUB_REPO = "Claudio-sys11/Price-Check"   # 자동 업데이트 기본 저장소
 
 # ===== 디자인 팔레트 =====
 FONT = "Segoe UI"
@@ -445,7 +446,7 @@ class App(tk.Tk):
         self.var_key = tk.StringVar()
         self.var_env = tk.StringVar(value="production")
         self.var_show_key = tk.BooleanVar(value=False)
-        self.var_github = tk.StringVar()
+        self.var_github = tk.StringVar(value=DEFAULT_GITHUB_REPO)
         self.var_model = tk.StringVar()      # 조회조건: 모델명 필터(클라이언트측)
         self.var_brand = tk.StringVar()      # 조회조건: 브랜드 필터(클라이언트측)
         self.var_wcorp = tk.StringVar()      # Wizfasta 업체코드
@@ -641,42 +642,49 @@ class App(tk.Tk):
                     cfg = json.load(f) or {}
         except (OSError, json.JSONDecodeError):
             cfg = {}
-        # github_repo 또는 update_url 중 하나라도 있으면 검사
+        # 저장소가 설정에 없으면 기본 저장소로 검사(별도 설정 없이도 자동 업데이트)
         if not (cfg.get("github_repo") or cfg.get("update_url")):
-            return
+            cfg["github_repo"] = DEFAULT_GITHUB_REPO
         threading.Thread(target=self._do_update_check, args=(cfg,), daemon=True).start()
 
     def _do_update_check(self, cfg: dict) -> None:
         manifest = updater.check(cfg)
         if manifest:
-            self.after(0, self._prompt_update, manifest)
+            self.after(0, self._auto_update, manifest)
 
-    def _prompt_update(self, manifest: dict) -> None:
+    def _auto_update(self, manifest: dict) -> None:
+        """묻지 않고 최신 버전을 자동으로 내려받아 무인 설치한다."""
         ver = manifest.get("version", "")
-        notes = (manifest.get("notes", "") or "")[:300]
         dl = manifest.get("url", "")
-        msg = f"새 버전 {ver} 이(가) 있습니다. (현재 {APP_VERSION})\n"
-        if notes:
-            msg += f"\n변경사항: {notes}\n"
-        msg += "\n지금 업데이트하시겠습니까? (앱이 종료되고 설치가 진행됩니다)"
         if not dl:
-            messagebox.showinfo("업데이트", msg + "\n\n(다운로드 URL이 매니페스트에 없습니다.)")
-            return
-        if messagebox.askyesno("업데이트 확인", msg):
-            self._run_update(dl)
+            return   # 다운로드 URL 이 없으면 조용히 건너뜀
+        self._run_update(dl, ver)
 
-    def _run_update(self, url: str) -> None:
-        self.status.set("업데이트 다운로드 중...")
+    def _run_update(self, url: str, ver: str = "") -> None:
+        try:
+            self.status.set(f"새 버전 {ver} 자동 업데이트 중… (다운로드)")
+        except Exception:
+            pass
+        try:
+            self.cmp_status.set(f"새 버전 {ver} 자동 업데이트 중…")
+        except Exception:
+            pass
+
         def worker():
             try:
                 path = updater.download_installer(url)
-            except Exception as exc:  # noqa: BLE001
-                self.after(0, lambda: messagebox.showerror("업데이트 실패", f"다운로드 오류:\n{exc}"))
+            except Exception:  # noqa: BLE001
+                # 자동 업데이트 실패는 사용자를 방해하지 않고 조용히 넘어감(다음 실행 시 재시도)
+                self.after(0, lambda: self.status.set("업데이트 확인 실패 — 다음 실행 시 재시도"))
                 return
+
             def finish():
-                updater.launch_installer(path)
-                self.destroy()  # 앱 종료 → 설치파일이 교체 진행
+                try:
+                    updater.launch_installer(path, silent=True)   # 무인 설치
+                finally:
+                    self.destroy()   # 앱 종료 → 설치파일이 교체 후 자동 재실행
             self.after(0, finish)
+
         threading.Thread(target=worker, daemon=True).start()
 
     # ================= 탭1: 재고현황 =================
@@ -779,15 +787,17 @@ class App(tk.Tk):
         )
         ttk.Label(btns, textvariable=self.cmp_status, style="Status.TLabel").pack(side="right")
 
-        # 결과 요약(둥근 통계 칩) — 완료 시 건수를 크게 표시
+        # 결과 요약(둥근 통계 칩) — 완료 시 건수를 크게, 우측 끝에 표시
         self.cmp_summary = tk.Frame(root, bg=BG)
         self.cmp_summary.pack(fill="x", padx=16, pady=(2, 4))
-        self.chip_total = StatChip(self.cmp_summary, "전체 (Wiz)", fill="#e0f7f1", fg="#0f766e")
-        self.chip_diff = StatChip(self.cmp_summary, "단가차이", fill=DIFF_BG, fg=DIFF_FG)
-        self.chip_unmatch = StatChip(self.cmp_summary, "미매칭", fill=UNMATCH_BG, fg="#4b5563")
-        self.chip_same = StatChip(self.cmp_summary, "단가일치", fill="#d7f5ed", fg="#0d9488")
+        chip_box = tk.Frame(self.cmp_summary, bg=BG)
+        chip_box.pack(side="right")   # 우측 끝 정렬
+        self.chip_total = StatChip(chip_box, "전체 (Wiz)", fill="#e0f7f1", fg="#0f766e")
+        self.chip_diff = StatChip(chip_box, "단가차이", fill=DIFF_BG, fg=DIFF_FG)
+        self.chip_unmatch = StatChip(chip_box, "미매칭", fill=UNMATCH_BG, fg="#4b5563")
+        self.chip_same = StatChip(chip_box, "단가일치", fill="#d7f5ed", fg="#0d9488")
         for c in (self.chip_total, self.chip_diff, self.chip_unmatch, self.chip_same):
-            c.pack(side="left", padx=(0, 10))
+            c.pack(side="left", padx=(10, 0))
 
         # 진행 체크리스트
         chk = ttk.LabelFrame(root, text=" 진행 상황 ")
@@ -1134,7 +1144,7 @@ class App(tk.Tk):
         self.var_key.set(cfg.get("API_CERT_KEY", ""))
         self.var_env.set(cfg.get("ENV", "production"))
         self._update_url = cfg.get("update_url", "")
-        self.var_github.set(cfg.get("github_repo", ""))
+        self.var_github.set(cfg.get("github_repo", "") or DEFAULT_GITHUB_REPO)
         # Wizfasta 로그인: 최초 공백 / '계속 저장' 아니면 24시간 후 공백 초기화
         wz = cfg.get("wizfasta") or {}
         keep = bool(wz.get("keep", False))

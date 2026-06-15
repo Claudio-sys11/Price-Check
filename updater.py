@@ -132,6 +132,33 @@ def download_installer(url: str, timeout: int = 120,
     return dst
 
 
-def launch_installer(path: str) -> None:
-    """설치파일을 실행한다(Windows). 설치파일이 실행 중 앱을 종료하고 업데이트한다."""
-    os.startfile(path)  # noqa: S606  (Windows 전용)
+def launch_installer(path: str, silent: bool = True) -> None:
+    """설치파일을 실행한다(Windows). 설치파일이 실행 중 앱을 종료하고 업데이트한다.
+
+    silent=True 면 사용자 개입 없이 무인(VERYSILENT)으로 설치하고, 설치 완료 후
+    설치 스크립트의 [Run] 항목이 새 버전 앱을 자동으로 다시 실행한다.
+    부모(현재 앱) 프로세스가 종료되어도 설치가 계속되도록 분리(DETACHED)해서 띄운다.
+    """
+    if not silent:
+        os.startfile(path)  # noqa: S606  (Windows 전용)
+        return
+
+    import subprocess
+    DETACHED_PROCESS = 0x00000008
+    CREATE_NEW_PROCESS_GROUP = 0x00000200
+    CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+    flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    try:
+        subprocess.Popen(
+            [path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOCANCEL"],
+            creationflags=flags | CREATE_BREAKAWAY_FROM_JOB,
+            close_fds=True,
+        )
+    except Exception:  # noqa: BLE001
+        # 작업(Job) 객체 제약 등으로 분리 실패 시 일반 실행으로 폴백
+        try:
+            subprocess.Popen(
+                [path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOCANCEL"],
+                creationflags=flags, close_fds=True)
+        except Exception:  # noqa: BLE001
+            os.startfile(path)  # noqa: S606

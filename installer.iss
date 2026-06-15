@@ -7,7 +7,7 @@
 
 #define MyAppId "8F3C2A91-7B4D-4E26-9A1F-EC0A17E5C001"
 #define MyAppName "EcountERP 재고현황 조회"
-#define MyAppVersion "1.0.26"
+#define MyAppVersion "1.0.27"
 #define MyAppPublisher "EcountInventory"
 #define MyAppExeName "EcountInventory.exe"
 
@@ -55,7 +55,10 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+; 일반(대화형) 설치: 마침 페이지의 체크박스로 실행
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+; 무인(자동 업데이트) 설치: 설치 완료 후 새 버전을 자동으로 다시 실행
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait; Check: WizardSilent
 
 [Code]
 { --- 설치 시작 시 이전 버전을 자동으로 제거(언인스톨)한다 --- }
