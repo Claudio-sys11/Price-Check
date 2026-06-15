@@ -43,6 +43,16 @@ SELECT_BG = "#a7e8da"   # 표 선택행(민트)
 
 MONEY_COLS = {"입고단가", "총단가", "Wiz_원가", "Ecount_입고단가", "원가-입고단가차이"}  # 우측정렬 금액 컬럼
 
+# Wizfasta 원가 가져오기 진행 체크리스트 단계
+WIZ_STEPS = [
+    ("start", "Chrome 시작"),
+    ("login", "Wizfasta 로그인"),
+    ("query", "상품DB 조회 (일반상품·재고≥1)"),
+    ("download", "전체 엑셀 다운로드"),
+    ("parse", "데이터 파싱"),
+    ("match", "모델명 매칭"),
+]
+
 
 def app_data_dir() -> str:
     base = os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -202,7 +212,12 @@ class App(tk.Tk):
         self.var_github = tk.StringVar()
         self.var_model = tk.StringVar()      # 조회조건: 모델명 필터(클라이언트측)
         self.var_brand = tk.StringVar()      # 조회조건: 브랜드 필터(클라이언트측)
+        self.var_wcorp = tk.StringVar()      # Wizfasta 업체코드
+        self.var_wid = tk.StringVar()        # Wizfasta 아이디
+        self.var_wpw = tk.StringVar()        # Wizfasta 비밀번호
+        self.var_wshow = tk.BooleanVar(value=False)
         self.ent_key: ttk.Entry | None = None
+        self.ent_wpw: ttk.Entry | None = None
 
         self._apply_theme()
         self._build_menu()
@@ -321,6 +336,18 @@ class App(tk.Tk):
                      values=["production", "test"]).grid(row=3, column=1, columnspan=2, sticky="w", **pad)
         ttk.Label(auth, text="(production=운영 / test=상자테스트)", foreground="#666").grid(
             row=4, column=1, columnspan=2, sticky="w", padx=8)
+
+        wiz = ttk.LabelFrame(win, text="Wizfasta 로그인 (가격비교용)")
+        wiz.pack(fill="x", padx=12, pady=6)
+        ttk.Label(wiz, text="업체코드").grid(row=0, column=0, sticky="e", **pad)
+        ttk.Entry(wiz, textvariable=self.var_wcorp, width=30).grid(row=0, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Label(wiz, text="아이디").grid(row=1, column=0, sticky="e", **pad)
+        ttk.Entry(wiz, textvariable=self.var_wid, width=30).grid(row=1, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Label(wiz, text="비밀번호").grid(row=2, column=0, sticky="e", **pad)
+        self.ent_wpw = ttk.Entry(wiz, textvariable=self.var_wpw, width=30, show="*")
+        self.ent_wpw.grid(row=2, column=1, sticky="w", **pad)
+        ttk.Checkbutton(wiz, text="표시", variable=self.var_wshow,
+                        command=self._toggle_wpw).grid(row=2, column=2, sticky="w", **pad)
 
         upd = ttk.LabelFrame(win, text="자동 업데이트")
         upd.pack(fill="x", padx=12, pady=6)
@@ -456,6 +483,10 @@ class App(tk.Tk):
         if self.ent_key is not None:
             self.ent_key.configure(show="" if self.var_show_key.get() else "*")
 
+    def _toggle_wpw(self) -> None:
+        if self.ent_wpw is not None:
+            self.ent_wpw.configure(show="" if self.var_wshow.get() else "*")
+
     # ================= 탭2: 가격비교 =================
     def _build_compare_tab(self) -> None:
         root = self.tab_cmp
@@ -480,6 +511,15 @@ class App(tk.Tk):
         )
         ttk.Label(btns, textvariable=self.cmp_status, style="Status.TLabel").pack(side="right")
 
+        # 진행 체크리스트
+        chk = ttk.LabelFrame(root, text=" 진행 상황 ")
+        chk.pack(fill="x", padx=16, pady=(0, 6))
+        self._step_labels = {}
+        for key, label in WIZ_STEPS:
+            lb = ttk.Label(chk, text=f"⬜  {label}", style="Muted.TLabel")
+            lb.pack(anchor="w", padx=10, pady=1)
+            self._step_labels[key] = (lb, label)
+
         tf = tk.Frame(root, bg=BORDER)
         tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
         self.tree_cmp = ttk.Treeview(tf, show="headings")
@@ -492,18 +532,49 @@ class App(tk.Tk):
         tf.rowconfigure(0, weight=1)
         tf.columnconfigure(0, weight=1)
 
+    def _reset_steps(self) -> None:
+        for key, (lb, label) in self._step_labels.items():
+            lb.configure(text=f"⬜  {label}", foreground=MUTED)
+
+    def _set_step(self, key: str, detail: str = "") -> None:
+        """체크리스트: key 이전 단계는 완료(✅), 현재 단계는 진행(⏳)으로 표시."""
+        order = [k for k, _ in WIZ_STEPS]
+        if key not in order:
+            return
+        idx = order.index(key)
+        for i, (k, label) in enumerate(WIZ_STEPS):
+            lb = self._step_labels[k][0]
+            if i < idx:
+                lb.configure(text=f"✅  {label}", foreground="#0d9488")
+            elif i == idx:
+                txt = f"⏳  {label}" + (f"  — {detail}" if detail else "")
+                lb.configure(text=txt, foreground=ACCENT)
+            else:
+                lb.configure(text=f"⬜  {label}", foreground=MUTED)
+
+    def _mark_all_done(self) -> None:
+        for key, (lb, label) in self._step_labels.items():
+            lb.configure(text=f"✅  {label}", foreground="#0d9488")
+
     def _on_fetch_wizfasta(self) -> None:
         if not getattr(self, "_inventory_display_all", []):
             messagebox.showwarning(
                 "재고 먼저 조회",
                 "먼저 ① 재고현황 탭에서 조회해 주세요.\n(EcountERP 모델명·입고단가가 있어야 비교됩니다.)")
             return
+        corp, uid, pw = self.var_wcorp.get().strip(), self.var_wid.get().strip(), self.var_wpw.get()
+        if not (corp and uid and pw):
+            messagebox.showwarning(
+                "Wizfasta 로그인 정보 필요",
+                "[설정] → 'Wizfasta 로그인'에 업체코드·아이디·비밀번호를 입력해 주세요.")
+            return
+        self._reset_steps()
         self.btn_wiz.configure(state="disabled")
         self.btn_cmp_csv.configure(state="disabled")
-        self.cmp_status.set("Wizfasta Chrome 시작 중…")
-        threading.Thread(target=self._do_fetch_wizfasta, daemon=True).start()
+        self.cmp_status.set("진행 중…")
+        threading.Thread(target=self._do_fetch_wizfasta, args=(corp, uid, pw), daemon=True).start()
 
-    def _do_fetch_wizfasta(self) -> None:
+    def _do_fetch_wizfasta(self, corp: str, uid: str, pw: str) -> None:
         try:
             import wizfasta_selenium
         except Exception as exc:  # noqa: BLE001
@@ -511,7 +582,9 @@ class App(tk.Tk):
             return
         try:
             rows = wizfasta_selenium.fetch_wizfasta_costs(
-                progress=lambda m: self.after(0, lambda m=m: self.cmp_status.set(m)))
+                corp, uid, pw,
+                progress=lambda key, detail="": self.after(0, lambda k=key, d=detail: self._set_step(k, d)),
+                headless=True)
         except Exception as exc:  # noqa: BLE001
             self.after(0, lambda: self._wiz_failed(f"Wizfasta 가져오기 실패: {exc}"))
             return
@@ -529,11 +602,13 @@ class App(tk.Tk):
             self.cmp_status.set("Wizfasta 원가 0건 — 로그인/조회 상태를 확인하세요.")
             messagebox.showwarning("데이터 없음", "Wizfasta에서 원가를 받지 못했습니다(0건).")
             return
+        self._set_step("match")
         ecount_data = [d for d in self._inventory_display_all]  # 모델명·입고단가 포함
         self._compare_rows = cmp.build_cost_comparison(self._wiz_rows, ecount_data)
         fill_tree(self.tree_cmp, self._compare_rows)
         self.btn_cmp_csv.configure(state="normal")
         matched = sum(1 for r in self._compare_rows if r.get("매칭") == "O")
+        self._mark_all_done()
         self.cmp_status.set(
             f"완료 — Wiz {len(self._wiz_rows)}건 / 모델명 매칭 {matched} / 미매칭 {len(self._compare_rows) - matched}")
 
@@ -552,6 +627,10 @@ class App(tk.Tk):
         self.var_env.set(cfg.get("ENV", "production"))
         self._update_url = cfg.get("update_url", "")
         self.var_github.set(cfg.get("github_repo", ""))
+        wz = cfg.get("wizfasta") or {}
+        self.var_wcorp.set(wz.get("corp", ""))
+        self.var_wid.set(wz.get("id", ""))
+        self.var_wpw.set(wz.get("pw", ""))
         payload = (cfg.get("inventory") or {}).get("payload", {})
         self.var_base_date.set(payload.get("BASE_DATE", ""))
         self.var_prod.set(payload.get("PROD_CD", ""))
@@ -566,6 +645,11 @@ class App(tk.Tk):
             "ENV": self.var_env.get(),
             "update_url": getattr(self, "_update_url", ""),
             "github_repo": self.var_github.get().strip(),
+            "wizfasta": {
+                "corp": self.var_wcorp.get().strip(),
+                "id": self.var_wid.get().strip(),
+                "pw": self.var_wpw.get(),
+            },
             "inventory": {
                 "endpoint": "/OAPI/V2/InventoryBalance/GetListInventoryBalanceStatus",
                 "payload": {

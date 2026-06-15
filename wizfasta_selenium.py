@@ -103,18 +103,32 @@ def _parse_xlsx(path: str) -> list[dict]:
     return out
 
 
-def fetch_wizfasta_costs(progress=None, login_wait: int = 300) -> list[dict]:
-    """상품DB 전체 엑셀을 받아 모델명·원가를 추출(실패 시 그리드 폴백)."""
+# Wizfasta 셀러로그인 자동 입력 (필드: corpCode / txtUserId / txtUserPwd, 버튼 btnLogin)
+_LOGIN_JS = r"""
+var c=document.getElementById('corpCode'), u=document.getElementById('txtUserId'),
+    p=document.getElementById('txtUserPwd'), b=document.getElementById('btnLogin');
+if(!c||!u||!p||!b) return 'no-form';
+c.value=arguments[0]; u.value=arguments[1]; p.value=arguments[2];
+b.click(); return 'submitted';
+"""
+
+
+def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
+                         progress=None, headless: bool = True) -> list[dict]:
+    """상품DB 전체 엑셀을 받아 모델명·원가를 추출(실패 시 그리드 폴백).
+
+    corp/uid/pw 가 주어지면 Wizfasta에 자동 로그인한다. progress(step_key, detail)
+    콜백으로 체크리스트 단계를 보고한다(step_key: start/login/query/download/parse).
+    """
     import json as _json
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
 
-    def say(m):
+    def step(key, detail=""):
         if progress:
-            progress(m)
+            progress(key, detail)
 
     dl_dir = _appdir("wiz_download")
-    # 이전 엑셀 정리
     for f in glob.glob(os.path.join(dl_dir, "*")):
         try:
             os.remove(f)
@@ -125,6 +139,9 @@ def fetch_wizfasta_costs(progress=None, login_wait: int = 300) -> list[dict]:
     opts.add_argument(f"--user-data-dir={_appdir('wizfasta_chrome')}")
     opts.add_argument("--no-first-run")
     opts.add_argument("--no-default-browser-check")
+    opts.add_argument("--window-size=1280,900")
+    if headless:
+        opts.add_argument("--headless=new")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("prefs", {
         "download.default_directory": dl_dir,
@@ -134,7 +151,7 @@ def fetch_wizfasta_costs(progress=None, login_wait: int = 300) -> list[dict]:
         "safebrowsing.enabled": True,
     })
 
-    say("Chrome 시작 중…")
+    step("start")
     driver = webdriver.Chrome(options=opts)
     try:
         try:
@@ -144,24 +161,32 @@ def fetch_wizfasta_costs(progress=None, login_wait: int = 300) -> list[dict]:
             pass
 
         driver.get(PRDDB_URL)
-        # 로그인 대기
-        deadline = time.time() + login_wait
-        warned = False
-        while "login" in driver.current_url.lower():
-            if not warned:
-                say("열린 Chrome 창에서 Wizfasta에 로그인해 주세요. (로그인하면 자동 진행)")
-                warned = True
-            if time.time() > deadline:
-                raise TimeoutError("로그인 대기 시간 초과")
-            time.sleep(2)
+
+        # 로그인 처리: 로그인 페이지면 자동 로그인
+        if "login" in driver.current_url.lower():
+            step("login")
+            if not (corp and uid and pw):
+                raise RuntimeError("Wizfasta 로그인 정보가 없습니다. [설정]에서 입력하세요.")
+            res = driver.execute_script(_LOGIN_JS, corp, uid, pw)
+            if res == "no-form":
+                raise RuntimeError("Wizfasta 로그인 폼을 찾지 못했습니다.")
+            # 로그인 완료(리다이렉트) 대기
+            ldl = time.time() + 30
+            while "login" in driver.current_url.lower() and time.time() < ldl:
+                time.sleep(1)
+            if "login" in driver.current_url.lower():
+                raise RuntimeError("Wizfasta 로그인 실패 — 업체코드/아이디/비밀번호를 확인하세요.")
+            driver.get(PRDDB_URL)
+            time.sleep(1.5)
+        else:
+            step("login", "세션 유지")
+
         if "PrdDbList" not in driver.current_url:
             driver.get(PRDDB_URL)
-            time.sleep(2)
+            time.sleep(1.5)
 
-        say("상품DB 조회 중… (일반상품 / 재고수량≥1)")
+        step("query")
         driver.execute_script(_SETUP_JS)
-
-        # 그리드 로딩 대기
         gdeadline = time.time() + 60
         grid_n = 0
         while time.time() < gdeadline:
@@ -169,41 +194,37 @@ def fetch_wizfasta_costs(progress=None, login_wait: int = 300) -> list[dict]:
             grid_n = driver.execute_script(_GRID_LEN_JS) or 0
             if grid_n:
                 break
-        say(f"조회 완료: {grid_n}건. 전체 엑셀 다운로드 중…")
+        step("query", f"{grid_n}건")
 
-        # 전체 엑셀 다운로드 클릭
+        step("download", "시작")
         driver.execute_script(_EXCEL_CLICK_JS)
-
-        # 다운로드 대기(진행 표시)
         xlsx = None
-        wdeadline = time.time() + 180
+        start = time.time()
+        wdeadline = start + 180
         while time.time() < wdeadline:
             time.sleep(1.5)
             files = [f for f in glob.glob(os.path.join(dl_dir, "*"))
                      if f.lower().endswith((".xlsx", ".xls"))]
             crs = glob.glob(os.path.join(dl_dir, "*.crdownload"))
             if files and not crs:
-                # 다운로드 완료 추정(크기 안정)
                 xlsx = max(files, key=os.path.getmtime)
                 s1 = os.path.getsize(xlsx)
                 time.sleep(1.0)
                 if os.path.getsize(xlsx) == s1:
                     break
-            secs = int(time.time() - (wdeadline - 180))
-            say(f"엑셀 다운로드 대기 중… {secs}s")
+            step("download", f"{int(time.time() - start)}s")
 
+        step("parse")
         if xlsx:
-            say("엑셀 파싱 중…")
             rows = _parse_xlsx(xlsx)
             if rows:
-                say(f"완료: {len(rows)}건 (엑셀)")
+                step("parse", f"{len(rows)}건 (엑셀)")
                 return rows
 
-        # 폴백: 그리드 직접 추출
-        say("엑셀 다운로드 실패 → 그리드에서 추출 중…")
+        # 폴백: 그리드 추출
         data = driver.execute_script(_GRID_EXTRACT_JS)
         rows = _json.loads(data) if data else []
-        say(f"완료: {len(rows)}건 (그리드)")
+        step("parse", f"{len(rows)}건 (그리드)")
         return rows
     finally:
         try:
