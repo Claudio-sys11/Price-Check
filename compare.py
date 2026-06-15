@@ -152,13 +152,15 @@ def build_cost_comparison(
     EcountERP 비교값은 재고현황 '소계의 평균원가'와 동일한 기준 — 모델별 가중 평균원가
     ( = Σ(입고단가 × 재고수량) / Σ재고수량 ) — 를 사용한다. (수량 합이 0이면 단순 평균)
 
+    모델명 매칭은 '정확 일치'가 아니라 '포함'(양방향 부분일치)으로 본다. 즉 한쪽 정규화
+    모델명이 다른 쪽에 포함되면 같은 상품으로 인식한다(브랜드/색상 접두가 붙는 Wizfasta
+    모델명 대응). 오인식 방지를 위해 포함되는 쪽 길이가 5자 이상일 때만 매칭한다.
+
     반환: 브랜드 | 모델명 | Wiz_원가 | Ecount_평균원가 | 원가-평균원가차이
           | Wiz_재고 | Ecount_재고 | 재고차이 | 매칭
     """
-    # EcountERP: 정규화 모델명 -> 가중 평균원가(소계 평균단가와 동일), 재고수량(모델 합계)
-    ec_sum_amt: dict[str, float] = {}     # Σ(입고단가 × 재고수량)
-    ec_qty_map: dict[str, float] = {}     # Σ재고수량
-    ec_prices: dict[str, list] = {}       # 수량합 0 대비 단순평균용 단가 목록
+    # EcountERP: 정규화 모델명별 그룹(가중 평균원가 + 재고합)
+    ec_groups: dict[str, dict] = {}       # norm -> {amt, qty, prices}
     for e in ecount_rows:
         if e.get("_subtotal"):
             continue
@@ -167,30 +169,50 @@ def build_cost_comparison(
             continue
         price = _to_number(e.get("입고단가"))
         qty = _to_number(e.get("재고수량"))
-        ec_sum_amt[k] = ec_sum_amt.get(k, 0.0) + price * qty
-        ec_qty_map[k] = ec_qty_map.get(k, 0.0) + qty
-        ec_prices.setdefault(k, []).append(price)
+        g = ec_groups.setdefault(k, {"amt": 0.0, "qty": 0.0, "prices": []})
+        g["amt"] += price * qty
+        g["qty"] += qty
+        g["prices"].append(price)
+    ec_keys = list(ec_groups.keys())
 
-    ec_avg_map: dict[str, float] = {}     # 모델별 평균원가
-    for k, qsum in ec_qty_map.items():
-        if qsum:
-            ec_avg_map[k] = ec_sum_amt[k] / qsum
-        else:
-            ps = [p for p in ec_prices.get(k, []) if p] or ec_prices.get(k, [])
-            ec_avg_map[k] = (sum(ps) / len(ps)) if ps else 0.0
+    def match_keys(wnorm: str) -> list:
+        """wnorm 과 매칭되는 EcountERP 정규화 모델키 목록(정확 일치 우선, 없으면 포함)."""
+        if not wnorm:
+            return []
+        if wnorm in ec_groups:        # 정확 일치 우선
+            return [wnorm]
+        hits = []
+        for k in ec_keys:
+            shorter = k if len(k) <= len(wnorm) else wnorm
+            if len(shorter) < 5:      # 너무 짧은 코드는 오인식 방지
+                continue
+            if k in wnorm or wnorm in k:
+                hits.append(k)
+        return hits
 
     rows_raw = []
     for w in wizfasta_rows:
-        k = normalize_model(w.get("모델명"))
+        wnorm = normalize_model(w.get("모델명"))
         wiz_cost = _to_number(w.get("원가"))
-        ec_price = ec_avg_map.get(k)        # 모델별 평균원가
-        matched = ec_price is not None
+        keys = match_keys(wnorm)
+        matched = bool(keys)
+        if matched:
+            amt = sum(ec_groups[k]["amt"] for k in keys)
+            qsum = sum(ec_groups[k]["qty"] for k in keys)
+            if qsum:
+                ec_price = amt / qsum
+            else:
+                ps = [p for k in keys for p in ec_groups[k]["prices"] if p]
+                ec_price = (sum(ps) / len(ps)) if ps else 0.0
+            ec_qty = qsum
+        else:
+            ec_price = None
+            ec_qty = None
         diff = (wiz_cost - ec_price) if matched else None
         has_diff = matched and diff is not None and int(round(diff)) != 0
 
-        # 재고수량 비교: Wizfasta 재고 vs EcountERP 재고(모델 합계)
+        # 재고수량 비교: Wizfasta 재고 vs EcountERP 재고(매칭 모델 합계)
         wiz_qty = _to_number(w.get("재고"))
-        ec_qty = ec_qty_map.get(k) if matched else None
         qty_diff = (wiz_qty - ec_qty) if (ec_qty is not None) else None
 
         # 정렬 우선순위 + 행 색상 태그

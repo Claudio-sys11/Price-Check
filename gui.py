@@ -1405,6 +1405,22 @@ class App(tk.Tk):
         for c in (self.chip_total, self.chip_diff, self.chip_unmatch, self.chip_same):
             c.pack(side="left", padx=(10, 0))
 
+        # 검색 필터(브랜드·모델명) — 비교 결과를 부분일치로 즉시 필터
+        self.var_cmp_brand = tk.StringVar()
+        self.var_cmp_model = tk.StringVar()
+        filt = ttk.Frame(root)
+        filt.pack(fill="x", padx=16, pady=(8, 0))
+        ttk.Label(filt, text="🔎  검색", style="Status.TLabel").pack(side="left", padx=(0, 10))
+        ttk.Label(filt, text="브랜드").pack(side="left")
+        ent_cb = ttk.Entry(filt, textvariable=self.var_cmp_brand, width=18)
+        ent_cb.pack(side="left", padx=(4, 14))
+        ttk.Label(filt, text="모델명").pack(side="left")
+        ent_cm = ttk.Entry(filt, textvariable=self.var_cmp_model, width=22)
+        ent_cm.pack(side="left", padx=(4, 14))
+        gray_button(filt, "필터 지우기", self._clear_cmp_filter, height=30, radius=15, padx=14).pack(side="left")
+        ent_cb.bind("<KeyRelease>", self._on_cmp_filter_change)
+        ent_cm.bind("<KeyRelease>", self._on_cmp_filter_change)
+
         tf = tk.Frame(root, bg=BORDER)
         tf.pack(fill="both", expand=True, padx=16, pady=(6, 14))
         self.tree_cmp = ttk.Treeview(tf, show="headings")
@@ -1693,22 +1709,60 @@ class App(tk.Tk):
             return
         self._set_step("match")
         ecount_data = [d for d in self._inventory_display_all]  # 모델명·입고단가 포함
-        self._compare_rows = cmp.build_cost_comparison(self._wiz_rows, ecount_data)
-        fill_tree(self.tree_cmp, self._compare_rows)
+        self._compare_rows_all = cmp.build_cost_comparison(self._wiz_rows, ecount_data)
         self.btn_cmp_csv.configure(state="normal")
+        self._mark_all_done()
+        self._render_compare()   # 현재 필터(브랜드/모델명) 적용해 표시
 
-        total = len(self._compare_rows)
-        n_diff = sum(1 for r in self._compare_rows if r.get("_tag") == "diff")
-        n_unmatch = sum(1 for r in self._compare_rows if r.get("_tag") == "unmatched")
-        n_same = sum(1 for r in self._compare_rows if r.get("_tag") == "same")
-        # 결과 수를 둥근 통계 칩으로 크게 표시(시인성)
+    def _render_compare(self) -> None:
+        """비교 결과에 브랜드/모델명 필터(부분일치)를 적용해 표·칩·상태를 갱신."""
+        allrows = getattr(self, "_compare_rows_all", [])
+        bf = self.var_cmp_brand.get().strip().lower()
+        mf = self.var_cmp_model.get().strip().lower()
+        mf_norm = cmp.normalize_model(mf) if mf else ""
+
+        def keep(r):
+            if bf and bf not in str(r.get("브랜드", "")).lower():
+                return False
+            if mf:
+                model = str(r.get("모델명", ""))
+                if mf in model.lower():
+                    return True
+                if mf_norm:
+                    mn = cmp.normalize_model(model)
+                    if mn and (mf_norm in mn or mn in mf_norm):
+                        return True
+                return False
+            return True
+
+        rows = [r for r in allrows if keep(r)]
+        self._compare_rows = rows
+        fill_tree(self.tree_cmp, rows)
+
+        total = len(rows)
+        n_diff = sum(1 for r in rows if r.get("_tag") == "diff")
+        n_unmatch = sum(1 for r in rows if r.get("_tag") == "unmatched")
+        n_same = sum(1 for r in rows if r.get("_tag") == "same")
         self.chip_total.set_value(f"{total:,}")
         self.chip_diff.set_value(f"{n_diff:,}")
         self.chip_unmatch.set_value(f"{n_unmatch:,}")
         self.chip_same.set_value(f"{n_same:,}")
 
-        self._mark_all_done()
-        self.cmp_status.set(f"완료 — 총 {total:,}건")
+        full = len(allrows)
+        if total == full:
+            self.cmp_status.set(f"완료 — 총 {total:,}건")
+        else:
+            self.cmp_status.set(f"필터 {total:,}건 / 전체 {full:,}건")
+
+    def _on_cmp_filter_change(self, event=None) -> None:
+        if getattr(self, "_compare_rows_all", []):
+            self._render_compare()
+
+    def _clear_cmp_filter(self) -> None:
+        self.var_cmp_brand.set("")
+        self.var_cmp_model.set("")
+        if getattr(self, "_compare_rows_all", []):
+            self._render_compare()
 
     # ================= 탭3: 설치 현황 =================
     def _build_setup_tab(self) -> None:
