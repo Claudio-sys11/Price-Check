@@ -40,7 +40,7 @@ def resource_path(rel: str) -> str:
     return os.path.join(base, rel)
 
 # ===== 디자인 팔레트 =====
-FONT = "Segoe UI"
+FONT = "맑은 고딕"   # Malgun Gothic — 한글에 최적화된 깔끔한 글자체
 BG = "#f3f4f6"          # 전체 배경(연한 회색)
 CARD = "#ffffff"        # 카드/표 배경
 TEXT = "#1f2937"        # 본문 텍스트
@@ -54,7 +54,8 @@ HEADING_BG = "#e0f7f1"  # 표 헤더 배경(연한 민트)
 HEADING_FG = "#0f766e"  # 표 헤더 글자(진한 틸)
 ROW_ALT = "#f5fbf9"     # 표 줄무늬(홀수행, 민트 기운)
 SUBTOTAL_BG = "#d7f5ed"  # 소계 행 강조(민트)
-SELECT_BG = "#a7e8da"   # 표 선택행(민트)
+SELECT_BG = "#f0e0a8"   # 표 선택행(샴페인 골드 — 민트 테마와 뚜렷이 구분되는 음영)
+SELECT_FG = "#0f1f1c"   # 선택행 글자
 
 # 프리미엄(고급) 톤
 HEADER_DARK = "#0b5c54"   # 헤더 그라데이션 진한 쪽(딥 틸)
@@ -326,44 +327,55 @@ class RoundedButton(tk.Canvas):
 
 
 class RoundedTabBar(tk.Frame):
-    """동글동글한 알약형(pill) 탭 바.
+    """알약형(pill) 탭 바. 탭별 크기·위치(좌/우)를 지정할 수 있다.
 
-    모든 탭은 동일한 크기이며, 활성 여부는 '색상'으로만 구분한다.
-    on_select(key) 콜백으로 선택을 알린다.
+    tabs: [(key, label, opts), ...]
+        opts: {"side": "left"|"right", "height", "font", "padx", "radius"}
+    활성 여부는 색상으로 구분한다. on_select(key) 콜백으로 선택을 알린다.
     """
 
     def __init__(self, parent, tabs, on_select, *, bg=BG,
                  active_fill=ACCENT, active_fg="white",
                  inactive_fill=TAB_INACTIVE, inactive_fg=MUTED,
-                 hover_fill=TAB_INACTIVE_HOVER,
-                 font=(FONT, 11, "bold"), height=44, radius=22, padx=28, gap=8):
+                 hover_fill=TAB_INACTIVE_HOVER):
         super().__init__(parent, bg=bg)
         self._on_select = on_select
         self._active_fill, self._active_fg = active_fill, active_fg
         self._inactive_fill, self._inactive_fg = inactive_fill, inactive_fg
         self._hover_fill = hover_fill
-        self._font, self._radius, self._h = font, radius, height
-        self._fnt = tkfont.Font(family=font[0], size=font[1], weight=font[2])
-        self._pill_w = max(self._fnt.measure(lbl) for _, lbl in tabs) + 2 * padx
-        self._canvases = {}
+        self._pills = {}
         self._active = None
-        for i, (key, label) in enumerate(tabs):
-            c = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0,
-                          width=self._pill_w, height=height)
-            c.pack(side="left", padx=(0 if i == 0 else gap, 0))
+        left_count = 0
+        for key, label, opts in tabs:
+            side = opts.get("side", "left")
+            h = opts.get("height", 44)
+            font = opts.get("font", (FONT, 11, "bold"))
+            padx = opts.get("padx", 28)
+            radius = opts.get("radius", 22)
+            fnt = tkfont.Font(family=font[0], size=font[1],
+                              weight=font[2] if len(font) > 2 else "normal")
+            w = fnt.measure(label) + 2 * padx
+            c = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, width=w, height=h)
+            if side == "right":
+                c.pack(side="right", padx=(8, 0))
+            else:
+                c.pack(side="left", padx=(0 if left_count == 0 else 8, 0))
+                left_count += 1
             c.bind("<Button-1>", lambda e, k=key: self._select(k))
             c.bind("<Enter>", lambda e, k=key: self._hover(k, True))
             c.bind("<Leave>", lambda e, k=key: self._hover(k, False))
-            self._canvases[key] = (c, label)
+            self._pills[key] = {"c": c, "label": label, "w": w, "h": h,
+                                "radius": radius, "font": font}
         if tabs:
             self.select(tabs[0][0])
 
     def _paint(self, key, fill, fg):
-        c, label = self._canvases[key]
+        p = self._pills[key]
+        c = p["c"]
         c.delete("all")
-        c.create_polygon(_round_rect_points(1, 1, self._pill_w - 1, self._h - 1, self._radius),
+        c.create_polygon(_round_rect_points(1, 1, p["w"] - 1, p["h"] - 1, p["radius"]),
                          fill=fill, outline="", smooth=True)
-        c.create_text(self._pill_w // 2, self._h // 2, text=label, fill=fg, font=self._font)
+        c.create_text(p["w"] // 2, p["h"] // 2, text=p["label"], fill=fg, font=p["font"])
 
     def _render(self, key, hover=False):
         if key == self._active:
@@ -373,7 +385,7 @@ class RoundedTabBar(tk.Frame):
                         self._inactive_fg)
 
     def _hover(self, key, on):
-        self._canvases[key][0].configure(cursor="hand2" if on else "")
+        self._pills[key]["c"].configure(cursor="hand2" if on else "")
         if key != self._active:
             self._render(key, hover=on)
 
@@ -384,7 +396,7 @@ class RoundedTabBar(tk.Frame):
 
     def select(self, key):
         self._active = key
-        for k in self._canvases:
+        for k in self._pills:
             self._render(k)
 
 
@@ -799,6 +811,113 @@ class _PMsg:
 pmsg = _PMsg()
 
 
+class PremiumMenu(tk.Toplevel):
+    """둥근 모서리 프리미엄 컨텍스트(우클릭) 메뉴.
+
+    items: [(label, command), ...] — label 이 "-" 이면 구분선.
+    호버 강조, 클릭 시 실행, 바깥 클릭/ESC 로 닫힘.
+    """
+
+    KEY = "#FF00FE"
+
+    def __init__(self, parent, items, x, y):
+        super().__init__(parent)
+        self.overrideredirect(True)
+        self._items = items
+        self._row_h, self._sep_h, self._pad = 32, 9, 6
+        self._hover = -1
+
+        fnt = tkfont.Font(family=FONT, size=10)
+        labels = [t for t, _ in items if t != "-"]
+        self._mw = (max((fnt.measure(t) for t in labels), default=120)) + 56
+        h = self._pad * 2
+        for t, _cmd in items:
+            h += self._sep_h if t == "-" else self._row_h
+        self._mh = h
+
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        x = min(int(x), sw - self._mw - 4)
+        y = min(int(y), sh - self._mh - 4)
+        self.geometry(f"{self._mw}x{self._mh}+{max(0, x)}+{max(0, y)}")
+        bg = "white"
+        try:
+            self.attributes("-topmost", True)
+            self.attributes("-transparentcolor", self.KEY)
+            self.configure(bg=self.KEY)
+            bg = self.KEY
+        except tk.TclError:
+            self.configure(bg="white")
+
+        self.c = tk.Canvas(self, width=self._mw, height=self._mh, bg=bg,
+                           highlightthickness=0, bd=0)
+        self.c.pack(fill="both", expand=True)
+        self._build()
+        self.c.bind("<Motion>", self._on_motion)
+        self.c.bind("<Button-1>", self._on_click)
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<FocusOut>", lambda e: self.destroy())
+        try:
+            self.update_idletasks()
+            self.lift()
+            self.focus_force()
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+    def _bounds(self):
+        b, y = [], self._pad
+        for i, (t, _cmd) in enumerate(self._items):
+            if t == "-":
+                y += self._sep_h
+            else:
+                b.append((i, y, y + self._row_h))
+                y += self._row_h
+        return b
+
+    def _build(self):
+        c = self.c
+        c.delete("all")
+        c.create_polygon(_round_rect_points(2, 2, self._mw - 2, self._mh - 2, 14),
+                         fill="white", outline=HAIRLINE, width=1, smooth=True)
+        y = self._pad
+        for i, (t, _cmd) in enumerate(self._items):
+            if t == "-":
+                c.create_line(16, y + self._sep_h // 2, self._mw - 16, y + self._sep_h // 2,
+                              fill=HAIRLINE)
+                y += self._sep_h
+            else:
+                fg = TEXT
+                if i == self._hover:
+                    c.create_polygon(
+                        _round_rect_points(6, y + 2, self._mw - 6, y + self._row_h - 2, 9),
+                        fill="#eaf7f4", outline="", smooth=True)
+                    fg = ACCENT_ACTIVE
+                c.create_text(20, y + self._row_h // 2, anchor="w", text=t,
+                              fill=fg, font=(FONT, 10))
+                y += self._row_h
+
+    def _on_motion(self, e):
+        idx = -1
+        for i, y0, y1 in self._bounds():
+            if y0 <= e.y <= y1:
+                idx = i
+                break
+        if idx != self._hover:
+            self._hover = idx
+            self.configure(cursor="hand2" if idx >= 0 else "")
+            self._build()
+
+    def _on_click(self, e):
+        for i, y0, y1 in self._bounds():
+            if y0 <= e.y <= y1:
+                cmd = self._items[i][1]
+                self.destroy()
+                if cmd:
+                    cmd()
+                return
+        self.destroy()
+
+
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -860,12 +979,16 @@ class App(tk.Tk):
         self._build_menu()
         self._build_header()
 
-        # 동글동글한 알약형 탭 바(모든 탭 동일 크기, 활성은 색상으로 구분)
+        # 알약형 탭 바 — 메인 2개는 좌측, '설치 현황'은 우측 상단에 절반 크기
         self._tabbar = RoundedTabBar(
             self,
-            [("inv", "재고현황 조회"), ("cmp", "가격비교"), ("setup", "설치 현황")],
+            [("inv", "재고현황 조회", {}),
+             ("cmp", "가격비교", {}),
+             ("setup", "설치 현황",
+              {"side": "right", "height": 24, "font": (FONT, 9, "bold"),
+               "padx": 13, "radius": 12})],
             self._switch_tab, bg=BG)
-        self._tabbar.pack(anchor="w", padx=18, pady=(10, 4))
+        self._tabbar.pack(fill="x", padx=18, pady=(10, 4))
 
         container = tk.Frame(self, bg=BG)
         container.pack(fill="both", expand=True, padx=14, pady=(0, 12))
@@ -907,35 +1030,39 @@ class App(tk.Tk):
         style.configure("Card.TFrame", background=CARD)
         style.configure("TLabel", background=BG, foreground=TEXT)
         style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=(FONT, 9))
-        style.configure("Status.TLabel", background=BG, foreground=ACCENT, font=(FONT, 9, "bold"))
-        # 입력
-        style.configure("TEntry", fieldbackground="white", bordercolor=BORDER, relief="flat", padding=4)
-        style.configure("TCombobox", fieldbackground="white", bordercolor=BORDER, padding=4)
-        # 카드형 LabelFrame
-        style.configure("TLabelframe", background=BG, bordercolor=BORDER,
+        style.configure("Status.TLabel", background=BG, foreground=ACCENT_ACTIVE, font=(FONT, 9, "bold"))
+        # 입력 — 평평하고 얇은 헤어라인(모던)
+        style.configure("TEntry", fieldbackground="white", bordercolor=BORDER,
+                        lightcolor=BORDER, darkcolor=BORDER, relief="flat", padding=6)
+        style.map("TEntry", bordercolor=[("focus", ACCENT)], lightcolor=[("focus", ACCENT)],
+                  darkcolor=[("focus", ACCENT)])
+        style.configure("TCombobox", fieldbackground="white", bordercolor=BORDER,
+                        lightcolor=BORDER, darkcolor=BORDER, relief="flat", padding=6)
+        # 카드형 LabelFrame — 얇은 헤어라인 + 깊은 제목
+        style.configure("TLabelframe", background=BG, bordercolor=HAIRLINE,
                         relief="solid", borderwidth=1)
-        style.configure("TLabelframe.Label", background=BG, foreground=SUBTLE,
+        style.configure("TLabelframe.Label", background=BG, foreground=ACCENT_ACTIVE,
                         font=(FONT, 10, "bold"))
-        # 버튼 (기본=보조, Accent=주요)
+        # 버튼 (대부분 RoundedButton 으로 대체)
         style.configure("TButton", background="#e5e7eb", foreground=TEXT,
                         bordercolor=BORDER, relief="flat", padding=(12, 7), font=(FONT, 10))
         style.map("TButton", background=[("active", "#d1d5db"), ("disabled", "#f0f1f3")],
                   foreground=[("disabled", "#9ca3af")])
-        style.configure("Accent.TButton", background=ACCENT, foreground="white",
-                        relief="flat", padding=(14, 7), font=(FONT, 10, "bold"))
-        style.map("Accent.TButton",
-                  background=[("active", ACCENT_ACTIVE), ("disabled", "#a7ddd4")],
-                  foreground=[("disabled", "#e6fffa")])
         style.configure("TCheckbutton", background=BG, foreground=TEXT)
         # (탭은 RoundedTabBar 라운드 알약 컴포넌트로 대체 — ttk.Notebook 미사용)
-        # 표(Treeview)
+        # 표(Treeview) — 넉넉한 행 높이·정돈된 헤더
         style.configure("Treeview", background="white", fieldbackground="white",
-                        foreground=TEXT, rowheight=29, font=(FONT, 10), borderwidth=0)
+                        foreground=TEXT, rowheight=32, font=(FONT, 10), borderwidth=0)
         style.configure("Treeview.Heading", background=HEADING_BG, foreground=HEADING_FG,
-                        font=(FONT, 10, "bold"), relief="flat", padding=6)
+                        font=(FONT, 10, "bold"), relief="flat", padding=8)
         style.map("Treeview.Heading", background=[("active", "#cdeee6")])
         style.map("Treeview", background=[("selected", SELECT_BG)],
-                  foreground=[("selected", "#0f3d36")])
+                  foreground=[("selected", SELECT_FG)])
+        # 스크롤바 — 얇고 모던하게
+        style.configure("Vertical.TScrollbar", background="#d7deda", troughcolor=BG,
+                        bordercolor=BG, arrowcolor=MUTED, relief="flat")
+        style.configure("Horizontal.TScrollbar", background="#d7deda", troughcolor=BG,
+                        bordercolor=BG, arrowcolor=MUTED, relief="flat")
 
     def _build_header(self) -> None:
         self._header_h = 66
@@ -1328,32 +1455,51 @@ class App(tk.Tk):
                 f"'{model}' (으)로 보려면 먼저 [재고현황 조회]를 눌러 조회하세요.\n"
                 "조회하면 이 모델명 필터가 자동 적용됩니다.")
 
-    # ---- 표 복사 기능(우클릭/Ctrl+C/더블클릭) ----
+    # ---- 표 복사 기능(우클릭 메뉴/드래그 선택/Ctrl+C/더블클릭) ----
     def _enable_tree_copy(self, tree: ttk.Treeview, status_var: tk.StringVar) -> None:
         tree.configure(selectmode="extended")
         tree._copy_status = status_var          # 복사 결과 안내용
         tree._ctx_cell = (None, None)
-        menu = tk.Menu(tree, tearoff=0)
-        menu.add_command(label="이 셀 복사", command=lambda: self._copy_cell(tree))
-        menu.add_command(label="선택 행 복사", command=lambda: self._copy_rows(tree))
-        menu.add_separator()
-        menu.add_command(label="전체 복사 (머리글 포함)",
-                         command=lambda: self._copy_rows(tree, all_rows=True, header=True))
-        tree._ctx_menu = menu
+        tree._drag_anchor = None
 
         def on_right(e):
             row = tree.identify_row(e.y)
             col = tree.identify_column(e.x)
-            if row:
-                if row not in tree.selection():
-                    tree.selection_set(row)
-                tree._ctx_cell = (row, col)
-                try:
-                    menu.tk_popup(e.x_root, e.y_root)
-                finally:
-                    menu.grab_release()
+            if not row:
+                return
+            if row not in tree.selection():
+                tree.selection_set(row)
+            tree._ctx_cell = (row, col)
+            items = [
+                ("이 셀 복사", lambda: self._copy_cell(tree)),
+                ("선택 행 복사", lambda: self._copy_rows(tree)),
+                ("-", None),
+                ("전체 복사 (머리글 포함)",
+                 lambda: self._copy_rows(tree, all_rows=True, header=True)),
+            ]
+            PremiumMenu(self, items, e.x_root, e.y_root)
+
+        # 드래그 선택(누른 행 → 끌어간 행 범위 선택)
+        def on_press(e):
+            tree._drag_anchor = tree.identify_row(e.y)
+
+        def on_drag(e):
+            anchor = getattr(tree, "_drag_anchor", None)
+            cur = tree.identify_row(e.y)
+            if not anchor or not cur:
+                return
+            items = tree.get_children()
+            try:
+                i1, i2 = items.index(anchor), items.index(cur)
+            except ValueError:
+                return
+            lo, hi = (i1, i2) if i1 <= i2 else (i2, i1)
+            tree.selection_set(items[lo:hi + 1])
+            tree.see(cur)
 
         tree.bind("<Button-3>", on_right)
+        tree.bind("<Button-1>", on_press, add="+")
+        tree.bind("<B1-Motion>", on_drag, add="+")
         tree.bind("<Control-c>", lambda e: self._copy_rows(tree))
         tree.bind("<Control-C>", lambda e: self._copy_rows(tree))
         tree.bind("<Double-1>", lambda e: self._copy_cell_at(tree, e))
