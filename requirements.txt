@@ -1,3 +1,4 @@
 requests>=2.31
 selenium>=4.20
 openpyxl>=3.1
+webdriver-manager>=4.0

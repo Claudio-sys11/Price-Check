@@ -224,6 +224,8 @@ class App(tk.Tk):
         self.var_wid = tk.StringVar()        # Wizfasta 아이디
         self.var_wpw = tk.StringVar()        # Wizfasta 비밀번호
         self.var_wshow = tk.BooleanVar(value=False)
+        self.var_wkeep = tk.BooleanVar(value=False)   # 24시간 이후에도 계속 저장
+        self._wiz_saved_at: float = 0.0      # Wizfasta 정보 저장 시각(만료 판정용)
         self.ent_key: ttk.Entry | None = None
         self.ent_wpw: ttk.Entry | None = None
 
@@ -356,6 +358,10 @@ class App(tk.Tk):
         self.ent_wpw.grid(row=2, column=1, sticky="w", **pad)
         ttk.Checkbutton(wiz, text="표시", variable=self.var_wshow,
                         command=self._toggle_wpw).grid(row=2, column=2, sticky="w", **pad)
+        ttk.Checkbutton(wiz, text="24시간 이후에도 계속 저장",
+                        variable=self.var_wkeep).grid(row=3, column=1, columnspan=2, sticky="w", **pad)
+        ttk.Label(wiz, text="(체크 해제 시: 저장 후 24시간이 지나면 자동으로 공백 초기화)",
+                  foreground="#666").grid(row=4, column=1, columnspan=2, sticky="w", padx=8)
 
         upd = ttk.LabelFrame(win, text="자동 업데이트")
         upd.pack(fill="x", padx=12, pady=6)
@@ -373,6 +379,11 @@ class App(tk.Tk):
         win.grab_set()
 
     def _save_settings(self, win: tk.Toplevel) -> None:
+        # Wizfasta 정보가 채워져 있으면 저장 시각 기록(24시간 만료 기준 갱신)
+        if self.var_wcorp.get().strip() and self.var_wid.get().strip() and self.var_wpw.get():
+            self._wiz_saved_at = time.time()
+        else:
+            self._wiz_saved_at = 0.0
         self._save_config()
         win.destroy()
 
@@ -672,10 +683,29 @@ class App(tk.Tk):
         self.var_env.set(cfg.get("ENV", "production"))
         self._update_url = cfg.get("update_url", "")
         self.var_github.set(cfg.get("github_repo", ""))
+        # Wizfasta 로그인: 최초 공백 / '계속 저장' 아니면 24시간 후 공백 초기화
         wz = cfg.get("wizfasta") or {}
-        self.var_wcorp.set(wz.get("corp", ""))
-        self.var_wid.set(wz.get("id", ""))
-        self.var_wpw.set(wz.get("pw", ""))
+        keep = bool(wz.get("keep", False))
+        saved_at = float(wz.get("saved_at", 0) or 0)
+        self.var_wkeep.set(keep)
+        expired = (not keep) and saved_at and (time.time() - saved_at > 86400)
+        if wz.get("corp") and not expired:
+            self.var_wcorp.set(wz.get("corp", ""))
+            self.var_wid.set(wz.get("id", ""))
+            self.var_wpw.set(wz.get("pw", ""))
+            self._wiz_saved_at = saved_at
+        else:
+            self.var_wcorp.set("")
+            self.var_wid.set("")
+            self.var_wpw.set("")
+            self._wiz_saved_at = 0.0
+            if expired:   # 만료분은 디스크에서도 공백 처리
+                cfg["wizfasta"] = {"corp": "", "id": "", "pw": "", "saved_at": 0, "keep": False}
+                try:
+                    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                        json.dump(cfg, f, ensure_ascii=False, indent=2)
+                except OSError:
+                    pass
         payload = (cfg.get("inventory") or {}).get("payload", {})
         self.var_base_date.set(payload.get("BASE_DATE", ""))
         self.var_prod.set(payload.get("PROD_CD", ""))
@@ -694,6 +724,8 @@ class App(tk.Tk):
                 "corp": self.var_wcorp.get().strip(),
                 "id": self.var_wid.get().strip(),
                 "pw": self.var_wpw.get(),
+                "saved_at": getattr(self, "_wiz_saved_at", 0.0),
+                "keep": self.var_wkeep.get(),
             },
             "inventory": {
                 "endpoint": "/OAPI/V2/InventoryBalance/GetListInventoryBalanceStatus",

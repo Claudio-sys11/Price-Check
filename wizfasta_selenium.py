@@ -129,6 +129,28 @@ def _parse_xlsx(path: str) -> list[dict]:
     return out
 
 
+def _make_driver(opts):
+    """Chrome 드라이버 생성. chromedriver는 webdriver-manager(설치 Chrome 버전에 맞춰
+    자동 다운로드·캐시)로 확보하고, 실패 시 Selenium Manager 기본 경로로 폴백한다.
+    프리징(.exe) 환경에서도 안정적으로 동작하도록 함."""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    errors = []
+    # 1) webdriver-manager (순수 파이썬, exe 에서 안정적)
+    try:
+        from webdriver_manager.chrome import ChromeDriverManager
+        path = ChromeDriverManager().install()
+        return webdriver.Chrome(service=Service(path), options=opts)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"webdriver-manager: {exc}")
+    # 2) Selenium Manager 기본
+    try:
+        return webdriver.Chrome(options=opts)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"selenium-manager: {exc}")
+    raise RuntimeError("Chrome/chromedriver 시작 실패 — " + " / ".join(errors)[:300])
+
+
 # Wizfasta 셀러로그인 자동 입력 (필드: corpCode / txtUserId / txtUserPwd, 버튼 btnLogin)
 _LOGIN_JS = r"""
 var c=document.getElementById('corpCode'), u=document.getElementById('txtUserId'),
@@ -185,11 +207,8 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
         "safebrowsing.enabled": True,
     })
 
-    step("start", "Chrome 연결 중")
-    try:
-        driver = webdriver.Chrome(options=opts)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Chrome 시작 실패: {exc}") from exc
+    step("start", "chromedriver 확보 중")
+    driver = _make_driver(opts)
     try:
         try:
             driver.execute_cdp_cmd("Page.setDownloadBehavior",
