@@ -16,6 +16,7 @@ import re
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, messagebox, filedialog
 
 from ecount_api import EcountClient, EcountApiError
@@ -42,7 +43,24 @@ ROW_ALT = "#f5fbf9"     # 표 줄무늬(홀수행, 민트 기운)
 SUBTOTAL_BG = "#d7f5ed"  # 소계 행 강조(민트)
 SELECT_BG = "#a7e8da"   # 표 선택행(민트)
 
-MONEY_COLS = {"입고단가", "총단가", "Wiz_원가", "Ecount_입고단가", "원가-입고단가차이"}  # 우측정렬 금액 컬럼
+# 라운드(동글) UI 색상
+TAB_INACTIVE = "#dbe7e3"        # 비활성 탭 알약 배경(연한 민트회색)
+TAB_INACTIVE_HOVER = "#cbe0d9"  # 비활성 탭 hover
+BTN_GRAY = "#e5e7eb"            # 보조 버튼
+BTN_GRAY_ACTIVE = "#d1d5db"
+BTN_GRAY_DISABLED = "#f0f1f3"
+BTN_GRAY_FG = TEXT
+BTN_GRAY_FG_DISABLED = "#9ca3af"
+DANGER = "#f87171"             # 중단 버튼(연한 빨강)
+DANGER_ACTIVE = "#ef4444"
+DANGER_DISABLED = "#f6cfcf"
+DIFF_BG = "#fff1f0"            # 가격비교: 단가차이 행
+DIFF_FG = "#b91c1c"
+UNMATCH_BG = "#eef1f4"         # 가격비교: 미매칭 행
+UNMATCH_FG = "#6b7280"
+
+MONEY_COLS = {"입고단가", "총단가", "Wiz_원가", "Ecount_입고단가", "원가-입고단가차이",
+              "Wiz_재고", "Ecount_재고", "재고차이"}  # 우측정렬(금액·수량) 컬럼
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # 실시간 활동 스피너
 
@@ -150,14 +168,196 @@ def fill_tree(tree: ttk.Treeview, rows: list[dict],
     tree.tag_configure("subtotal", background=SUBTOTAL_BG, font=(FONT, 10, "bold"))
     tree.tag_configure("odd", background=ROW_ALT)
     tree.tag_configure("even", background="white")
+    # 가격비교 행 색상(정렬 그룹 구분): 단가차이 / 미매칭 / 동일
+    tree.tag_configure("cmp_diff", background=DIFF_BG, foreground=DIFF_FG)
+    tree.tag_configure("cmp_unmatched", background=UNMATCH_BG, foreground=UNMATCH_FG)
+    tree.tag_configure("cmp_same", background="white")
     i = 0
     for r in rows:
         if r.get("_subtotal"):
             tags: tuple = ("subtotal",)
+        elif r.get("_tag") == "diff":
+            tags = ("cmp_diff",)
+        elif r.get("_tag") == "unmatched":
+            tags = ("cmp_unmatched",)
+        elif r.get("_tag") == "same":
+            tags = ("cmp_same",)
         else:
             tags = ("odd",) if (i % 2) else ("even",)
             i += 1
         tree.insert("", "end", values=[r.get(h, "") for h in headers], tags=tags)
+
+
+# ===================== 동글동글(라운드) UI 컴포넌트 =====================
+def _round_rect_points(x1, y1, x2, y2, r):
+    """둥근 사각형을 그릴 다각형 좌표(smooth=True 와 함께 사용)."""
+    r = max(0, min(r, (x2 - x1) / 2, (y2 - y1) / 2))
+    return [
+        x1 + r, y1,  x2 - r, y1,  x2, y1,
+        x2, y1 + r,  x2, y2 - r,  x2, y2,
+        x2 - r, y2,  x1 + r, y2,  x1, y2,
+        x1, y2 - r,  x1, y1 + r,  x1, y1,
+    ]
+
+
+class RoundedButton(tk.Canvas):
+    """동글동글한 라운드 버튼(Canvas 기반) — ttk.Button 대체.
+
+    지원: command, state('normal'/'disabled'), text 변경, hover 효과.
+    부모 배경색(bg)을 받아 모서리가 자연스럽게 비치도록 한다.
+    """
+
+    def __init__(self, parent, text="", command=None, *, bg=BG,
+                 fill=ACCENT, fill_active=ACCENT_ACTIVE, fill_disabled="#a7ddd4",
+                 fg="white", fg_disabled="#e6fffa",
+                 font=(FONT, 10, "bold"), height=38, radius=19, padx=20, minwidth=0):
+        super().__init__(parent, bg=bg, highlightthickness=0, bd=0, height=height)
+        self._command = command
+        self._fill, self._fill_active, self._fill_disabled = fill, fill_active, fill_disabled
+        self._fg, self._fg_disabled = fg, fg_disabled
+        self._font = font
+        self._radius, self._h = radius, height
+        self._state = "normal"
+        self._text = text
+        self._hover = False
+        weight = font[2] if len(font) > 2 else "normal"
+        self._fnt = tkfont.Font(family=font[0], size=font[1], weight=weight)
+        w = max(minwidth, self._fnt.measure(text) + 2 * padx)
+        super().configure(width=w)
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self._draw()
+
+    def _cur_w(self):
+        w = self.winfo_width()
+        return w if w > 1 else int(self["width"])
+
+    def _draw(self):
+        self.delete("all")
+        w, h = self._cur_w(), self._h
+        if self._state == "disabled":
+            fillc, fgc = self._fill_disabled, self._fg_disabled
+        elif self._hover:
+            fillc, fgc = self._fill_active, self._fg
+        else:
+            fillc, fgc = self._fill, self._fg
+        self.create_polygon(_round_rect_points(1, 1, w - 1, h - 1, self._radius),
+                            fill=fillc, outline="", smooth=True)
+        self.create_text(w // 2, h // 2, text=self._text, fill=fgc, font=self._font)
+
+    def _on_click(self, _e):
+        if self._state != "disabled" and self._command:
+            self._command()
+
+    def _on_enter(self, _e):
+        if self._state != "disabled":
+            self._hover = True
+            self.configure(cursor="hand2")
+            self._draw()
+
+    def _on_leave(self, _e):
+        self._hover = False
+        self.configure(cursor="")
+        self._draw()
+
+    def configure(self, cnf=None, **kw):   # ttk.Button 처럼 state/text/command 처리
+        if cnf and isinstance(cnf, dict):
+            kw.update(cnf)
+        redraw = False
+        if "state" in kw:
+            self._state = kw.pop("state")
+            self._hover = False
+            redraw = True
+        if "text" in kw:
+            self._text = kw.pop("text")
+            redraw = True
+        if "command" in kw:
+            self._command = kw.pop("command")
+        if kw:
+            super().configure(**kw)
+        if redraw:
+            self._draw()
+
+    config = configure
+
+
+class RoundedTabBar(tk.Frame):
+    """동글동글한 알약형(pill) 탭 바.
+
+    모든 탭은 동일한 크기이며, 활성 여부는 '색상'으로만 구분한다.
+    on_select(key) 콜백으로 선택을 알린다.
+    """
+
+    def __init__(self, parent, tabs, on_select, *, bg=BG,
+                 active_fill=ACCENT, active_fg="white",
+                 inactive_fill=TAB_INACTIVE, inactive_fg=MUTED,
+                 hover_fill=TAB_INACTIVE_HOVER,
+                 font=(FONT, 11, "bold"), height=44, radius=22, padx=28, gap=8):
+        super().__init__(parent, bg=bg)
+        self._on_select = on_select
+        self._active_fill, self._active_fg = active_fill, active_fg
+        self._inactive_fill, self._inactive_fg = inactive_fill, inactive_fg
+        self._hover_fill = hover_fill
+        self._font, self._radius, self._h = font, radius, height
+        self._fnt = tkfont.Font(family=font[0], size=font[1], weight=font[2])
+        self._pill_w = max(self._fnt.measure(lbl) for _, lbl in tabs) + 2 * padx
+        self._canvases = {}
+        self._active = None
+        for i, (key, label) in enumerate(tabs):
+            c = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0,
+                          width=self._pill_w, height=height)
+            c.pack(side="left", padx=(0 if i == 0 else gap, 0))
+            c.bind("<Button-1>", lambda e, k=key: self._select(k))
+            c.bind("<Enter>", lambda e, k=key: self._hover(k, True))
+            c.bind("<Leave>", lambda e, k=key: self._hover(k, False))
+            self._canvases[key] = (c, label)
+        if tabs:
+            self.select(tabs[0][0])
+
+    def _paint(self, key, fill, fg):
+        c, label = self._canvases[key]
+        c.delete("all")
+        c.create_polygon(_round_rect_points(1, 1, self._pill_w - 1, self._h - 1, self._radius),
+                         fill=fill, outline="", smooth=True)
+        c.create_text(self._pill_w // 2, self._h // 2, text=label, fill=fg, font=self._font)
+
+    def _render(self, key, hover=False):
+        if key == self._active:
+            self._paint(key, self._active_fill, self._active_fg)
+        else:
+            self._paint(key, self._hover_fill if hover else self._inactive_fill,
+                        self._inactive_fg)
+
+    def _hover(self, key, on):
+        self._canvases[key][0].configure(cursor="hand2" if on else "")
+        if key != self._active:
+            self._render(key, hover=on)
+
+    def _select(self, key):
+        self.select(key)
+        if self._on_select:
+            self._on_select(key)
+
+    def select(self, key):
+        self._active = key
+        for k in self._canvases:
+            self._render(k)
+
+
+def accent_button(parent, text, command, *, bg=BG, **kw):
+    """민트 강조 라운드 버튼."""
+    return RoundedButton(parent, text, command, bg=bg, fill=ACCENT,
+                         fill_active=ACCENT_ACTIVE, fill_disabled="#a7ddd4",
+                         fg="white", fg_disabled="#e6fffa", **kw)
+
+
+def gray_button(parent, text, command, *, bg=BG, **kw):
+    """보조(회색) 라운드 버튼."""
+    return RoundedButton(parent, text, command, bg=bg, fill=BTN_GRAY,
+                         fill_active=BTN_GRAY_ACTIVE, fill_disabled=BTN_GRAY_DISABLED,
+                         fg=BTN_GRAY_FG, fg_disabled=BTN_GRAY_FG_DISABLED, **kw)
 
 
 def export_rows_csv(rows: list[dict], initial: str = "export.csv") -> None:
@@ -233,22 +433,38 @@ class App(tk.Tk):
         self._build_menu()
         self._build_header()
 
-        nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True, padx=14, pady=(6, 12))
-        self.tab_inv = ttk.Frame(nb, style="Tab.TFrame")
-        self.tab_cmp = ttk.Frame(nb, style="Tab.TFrame")
-        self.tab_setup = ttk.Frame(nb, style="Tab.TFrame")
-        nb.add(self.tab_inv, text="  재고현황 조회  ")
-        nb.add(self.tab_cmp, text="  가격비교  ")
-        nb.add(self.tab_setup, text="  설치 현황  ")
+        # 동글동글한 알약형 탭 바(모든 탭 동일 크기, 활성은 색상으로 구분)
+        self._tabbar = RoundedTabBar(
+            self,
+            [("inv", "재고현황 조회"), ("cmp", "가격비교"), ("setup", "설치 현황")],
+            self._switch_tab, bg=BG)
+        self._tabbar.pack(anchor="w", padx=18, pady=(10, 4))
+
+        container = tk.Frame(self, bg=BG)
+        container.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        self.tab_inv = tk.Frame(container, bg=BG)
+        self.tab_cmp = tk.Frame(container, bg=BG)
+        self.tab_setup = tk.Frame(container, bg=BG)
+        for f in (self.tab_inv, self.tab_cmp, self.tab_setup):
+            f.grid(row=0, column=0, sticky="nsew")
+        container.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+        self._tab_frames = {"inv": self.tab_inv, "cmp": self.tab_cmp, "setup": self.tab_setup}
 
         self._build_inventory_tab()
         self._build_compare_tab()
         self._build_setup_tab()
         self._load_config()
 
+        self._switch_tab("inv")   # 기본 탭
+
         # 실행 시 백그라운드로 업데이트 확인
         self.after(800, self._start_update_check)
+
+    def _switch_tab(self, key: str) -> None:
+        frame = self._tab_frames.get(key)
+        if frame is not None:
+            frame.tkraise()
 
     # ================= 디자인 테마 =================
     def _apply_theme(self) -> None:
@@ -284,16 +500,7 @@ class App(tk.Tk):
                   background=[("active", ACCENT_ACTIVE), ("disabled", "#a7ddd4")],
                   foreground=[("disabled", "#e6fffa")])
         style.configure("TCheckbutton", background=BG, foreground=TEXT)
-        # 노트북 탭
-        style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(6, 6, 6, 0))
-        # 비활성 탭은 작게, 활성(선택) 탭은 크게
-        style.configure("TNotebook.Tab", background="#e5e7eb", foreground=MUTED,
-                        padding=(12, 5), font=(FONT, 9), borderwidth=0)
-        style.map("TNotebook.Tab",
-                  background=[("selected", CARD)],
-                  foreground=[("selected", ACCENT)],
-                  padding=[("selected", (26, 12))],
-                  font=[("selected", (FONT, 13, "bold"))])
+        # (탭은 RoundedTabBar 라운드 알약 컴포넌트로 대체 — ttk.Notebook 미사용)
         # 표(Treeview)
         style.configure("Treeview", background="white", fieldbackground="white",
                         foreground=TEXT, rowheight=29, font=(FONT, 10), borderwidth=0)
@@ -379,9 +586,8 @@ class App(tk.Tk):
 
         btns = ttk.Frame(win)
         btns.pack(fill="x", padx=12, pady=(6, 12))
-        ttk.Button(btns, text="저장", style="Accent.TButton",
-                   command=lambda: self._save_settings(win)).pack(side="right", padx=4)
-        ttk.Button(btns, text="닫기", command=win.destroy).pack(side="right", padx=4)
+        accent_button(btns, "저장", lambda: self._save_settings(win)).pack(side="right", padx=4)
+        gray_button(btns, "닫기", win.destroy).pack(side="right", padx=4)
 
         win.grab_set()
 
@@ -480,15 +686,15 @@ class App(tk.Tk):
 
         btns = ttk.Frame(root)
         btns.pack(fill="x", padx=16, pady=(2, 6))
-        self.btn_query = ttk.Button(btns, text="🔍  재고현황 조회", style="Accent.TButton",
-                                    command=self._on_query)
+        self.btn_query = accent_button(btns, "🔍  재고현황 조회", self._on_query)
         self.btn_query.pack(side="left")
-        self.btn_inv_csv = ttk.Button(btns, text="CSV 내보내기",
-                                      command=lambda: export_rows_csv(self._inventory_display, "inventory.csv"),
-                                      state="disabled")
+        self.btn_inv_csv = gray_button(
+            btns, "CSV 내보내기",
+            lambda: export_rows_csv(self._inventory_display, "inventory.csv"))
+        self.btn_inv_csv.configure(state="disabled")
         self.btn_inv_csv.pack(side="left", padx=8)
-        self.btn_sub_csv = ttk.Button(btns, text="소계/평균만 내보내기",
-                                      command=self._export_subtotals, state="disabled")
+        self.btn_sub_csv = gray_button(btns, "소계/평균만 내보내기", self._export_subtotals)
+        self.btn_sub_csv.configure(state="disabled")
         self.btn_sub_csv.pack(side="left")
         self.status = tk.StringVar(value="대기 중")
         ttk.Label(btns, textvariable=self.status, style="Status.TLabel").pack(side="right")
@@ -525,15 +731,18 @@ class App(tk.Tk):
 
         btns = ttk.Frame(root)
         btns.pack(fill="x", padx=16, pady=(4, 6))
-        self.btn_wiz = ttk.Button(btns, text="🛒  Wizfasta 원가 가져오기",
-                                  style="Accent.TButton", command=self._on_fetch_wizfasta)
+        self.btn_wiz = accent_button(btns, "🛒  Wizfasta 원가 가져오기", self._on_fetch_wizfasta)
         self.btn_wiz.pack(side="left")
-        self.btn_wiz_stop = ttk.Button(btns, text="■ 중단", command=self._on_stop_wizfasta,
-                                       state="disabled")
+        self.btn_wiz_stop = RoundedButton(
+            btns, "■ 중단", self._on_stop_wizfasta, bg=BG,
+            fill=DANGER, fill_active=DANGER_ACTIVE, fill_disabled=DANGER_DISABLED,
+            fg="white", fg_disabled="#fbeaea")
+        self.btn_wiz_stop.configure(state="disabled")
         self.btn_wiz_stop.pack(side="left", padx=8)
-        self.btn_cmp_csv = ttk.Button(btns, text="비교결과 CSV 내보내기",
-                                      command=lambda: export_rows_csv(self._compare_rows, "price_compare.csv"),
-                                      state="disabled")
+        self.btn_cmp_csv = gray_button(
+            btns, "비교결과 CSV 내보내기",
+            lambda: export_rows_csv(self._compare_rows, "price_compare.csv"))
+        self.btn_cmp_csv.configure(state="disabled")
         self.btn_cmp_csv.pack(side="left", padx=8)
         self.cmp_status = tk.StringVar(
             value="먼저 재고현황 탭에서 조회한 뒤, Wizfasta 원가 가져오기를 누르세요."
@@ -746,13 +955,13 @@ class App(tk.Tk):
             st.grid(row=1, column=0, sticky="w", padx=10, pady=2)
             self._setup_status[it["name"]] = st
             if it["btn"]:
-                ttk.Button(row, text=it["btn"],
-                           command=lambda u=it["url"]: self._open_url(u)).grid(
-                    row=0, column=1, rowspan=2, sticky="e", padx=10, pady=4)
+                gray_button(row, it["btn"],
+                            lambda u=it["url"]: self._open_url(u)).grid(
+                    row=0, column=1, rowspan=2, sticky="e", padx=10, pady=6)
             row.columnconfigure(0, weight=1)
 
-        ttk.Button(root, text="🔄  다시 확인", style="Accent.TButton",
-                   command=self._check_requirements).pack(anchor="w", padx=18, pady=12)
+        accent_button(root, "🔄  다시 확인", self._check_requirements).pack(
+            anchor="w", padx=18, pady=12)
         self.after(300, self._check_requirements)
 
     def _open_url(self, url: str | None) -> None:

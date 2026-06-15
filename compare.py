@@ -147,11 +147,13 @@ def build_cost_comparison(
     """Wizfasta 상품DB(모델명·원가)와 EcountERP 재고(모델명·입고단가)를 모델명으로 매칭.
 
     wizfasta_rows: [{모델명, 브랜드, 원가, 재고}, ...]
-    ecount_rows  : 재고현황 표시 데이터 행(모델명·입고단가 포함, 소계 제외)
-    반환: 브랜드 | 모델명 | Wiz_원가 | Ecount_입고단가 | 원가-입고단가차이 | 재고(Wiz) | 매칭
+    ecount_rows  : 재고현황 표시 데이터 행(모델명·입고단가·재고수량 포함, 소계 제외)
+    반환: 브랜드 | 모델명 | Wiz_원가 | Ecount_입고단가 | 원가-입고단가차이
+          | Wiz_재고 | Ecount_재고 | 재고차이 | 매칭
     """
-    # EcountERP: 정규화 모델명 -> 입고단가(0 아닌 값 우선)
+    # EcountERP: 정규화 모델명 -> 입고단가(0 아닌 값 우선), 재고수량(모델 전체 합계)
     ec_map: dict[str, float] = {}
+    ec_qty_map: dict[str, float] = {}
     for e in ecount_rows:
         if e.get("_subtotal"):
             continue
@@ -161,24 +163,54 @@ def build_cost_comparison(
         price = _to_number(e.get("입고단가"))
         if k not in ec_map or (ec_map[k] == 0 and price):
             ec_map[k] = price
+        ec_qty_map[k] = ec_qty_map.get(k, 0.0) + _to_number(e.get("재고수량"))
 
-    out = []
+    rows_raw = []
     for w in wizfasta_rows:
         k = normalize_model(w.get("모델명"))
         wiz_cost = _to_number(w.get("원가"))
         ec_price = ec_map.get(k)
         matched = ec_price is not None
         diff = (wiz_cost - ec_price) if matched else None
-        out.append({
+        has_diff = matched and diff is not None and int(round(diff)) != 0
+
+        # 재고수량 비교: Wizfasta 재고 vs EcountERP 재고(모델 합계)
+        wiz_qty = _to_number(w.get("재고"))
+        ec_qty = ec_qty_map.get(k) if matched else None
+        qty_diff = (wiz_qty - ec_qty) if (ec_qty is not None) else None
+
+        # 정렬 우선순위 + 행 색상 태그
+        #   0: 매칭 O + 단가차이 있음  (상단)
+        #   1: 매칭 X (미매칭)          (중간)
+        #   2: 매칭 O + 단가차이 없음   (하단)
+        if not matched:
+            prio, tag = 1, "unmatched"
+        elif has_diff:
+            prio, tag = 0, "diff"
+        else:
+            prio, tag = 2, "same"
+
+        rows_raw.append({
+            "_prio": prio,
+            "_tag": tag,
             "브랜드": w.get("브랜드", ""),
             "모델명": w.get("모델명", ""),
             "Wiz_원가": f"{int(round(wiz_cost)):,}",
             "Ecount_입고단가": (f"{int(round(ec_price)):,}" if matched else ""),
             "원가-입고단가차이": (f"{int(round(diff)):,}" if diff is not None else ""),
-            "재고(Wiz)": w.get("재고", ""),
+            "Wiz_재고": f"{int(round(wiz_qty)):,}",
+            "Ecount_재고": (f"{int(round(ec_qty)):,}" if ec_qty is not None else ""),
+            "재고차이": (f"{int(round(qty_diff)):,}" if qty_diff is not None else ""),
             "매칭": "O" if matched else "X",
         })
-    return out
+
+    # 우선순위(차이>미매칭>동일) → 브랜드 → 모델명 순 정렬
+    rows_raw.sort(key=lambda r: (r["_prio"],
+                                 str(r["브랜드"] or "").upper(),
+                                 str(r["모델명"] or "").upper()))
+    for r in rows_raw:
+        r.pop("_prio", None)   # 표시·열에는 쓰지 않음(_tag 는 색상용으로 유지)
+    return rows_raw
 
 
 def add_subtotals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
