@@ -194,14 +194,122 @@ def _make_driver_timeout(opts, timeout: int = 60):
     return box["d"]
 
 
-# Wizfasta 셀러로그인 자동 입력 (필드: corpCode / txtUserId / txtUserPwd, 버튼 btnLogin)
-_LOGIN_JS = r"""
+# Wizfasta 셀러 로그인 폼 채우기 (필드: corpCode / txtUserId / txtUserPwd)
+# 값은 DOM과 jQuery 양쪽으로 넣고 input/change 이벤트를 발생시킨다(페이지의 fn_Login 이
+# $("#corpCode").val() 등으로 읽으므로 jQuery 값 동기화가 중요).
+_LOGIN_FILL_JS = r"""
 var c=document.getElementById('corpCode'), u=document.getElementById('txtUserId'),
-    p=document.getElementById('txtUserPwd'), b=document.getElementById('btnLogin');
-if(!c||!u||!p||!b) return 'no-form';
-c.value=arguments[0]; u.value=arguments[1]; p.value=arguments[2];
-b.click(); return 'submitted';
+    p=document.getElementById('txtUserPwd');
+if(!c||!u||!p) return 'no-form';
+function setv(el,v){ el.value=v;
+  try{ if(window.jQuery){ window.jQuery(el).val(v); } }catch(e){}
+  try{ el.dispatchEvent(new Event('input',{bubbles:true})); }catch(e){}
+  try{ el.dispatchEvent(new Event('change',{bubbles:true})); }catch(e){}
+}
+setv(c,arguments[0]); setv(u,arguments[1]); setv(p,arguments[2]);
+try{ var h=document.getElementById('hdLoginDiv'); if(h) h.value='Seller'; }catch(e){}
+return 'filled';
 """
+
+# 셀러 로그인 실행: 페이지의 실제 로그인 함수 fn_Login() 호출
+# (fn_Login 이 /Login/Login_Ajax.aspx 로 AJAX → 성공 시 alert 후 location.href 리다이렉트)
+_LOGIN_SUBMIT_JS = r"""
+try{ if(typeof fn_Login==='function'){ fn_Login(); return 'fn_Login'; } }catch(e){ return 'err:'+e; }
+var b=document.getElementById('btnLogin'); if(b){ b.click(); return 'click'; }
+return 'no-button';
+"""
+
+
+def _login_wizfasta(driver, corp, uid, pw, step, guard):
+    """Wizfasta 셀러 로그인.
+
+    동작: 폼 채우기 → fn_Login() 호출 → (성공/실패) alert 수락 → 리다이렉트 확인.
+    - 로그인 성공 시 성공 메시지 alert 가 뜨며, 이 alert 를 수락해야 location.href 리다이렉트가
+      진행된다(수락하지 않으면 로그인 페이지에 멈춤 = 기존 증상).
+    - 실패 시 오류 메시지 alert 후 로그인 페이지에 머문다 → RuntimeError 로 사유를 보고.
+    """
+    from selenium.common.exceptions import NoAlertPresentException
+
+    def take_alert():
+        """대기 중인 alert 가 있으면 텍스트를 읽고 수락, 없으면 None."""
+        try:
+            al = driver.switch_to.alert
+            t = (al.text or "").strip()
+            try:
+                al.accept()
+            except Exception:
+                pass
+            return t
+        except NoAlertPresentException:
+            return None
+        except Exception:
+            return None
+
+    # 1) 로그인 폼(corpCode) 로드 대기
+    for _ in range(20):
+        guard(driver)
+        try:
+            if driver.execute_script("return !!document.getElementById('corpCode');"):
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+    # 2) 값 채우기
+    step("login", "로그인 정보 입력")
+    if driver.execute_script(_LOGIN_FILL_JS, corp, uid, pw) == "no-form":
+        raise RuntimeError("Wizfasta 로그인 폼을 찾지 못했습니다. (페이지 구조가 바뀌었을 수 있습니다)")
+
+    # 3) 로그인 실행
+    step("login", "로그인 시도")
+    driver.execute_script(_LOGIN_SUBMIT_JS)
+
+    # 4) 결과 대기: alert(성공/실패) 수락 + 리다이렉트 확인
+    last_msg = ""
+    while True:
+        guard(driver)
+        t = take_alert()
+        if t is not None:
+            last_msg = t or last_msg
+            if t:
+                step("login", t[:24])
+            # alert 수락 후 리다이렉트가 진행될 여유를 두고 URL 변화 확인
+            for _ in range(12):
+                guard(driver)
+                t2 = take_alert()
+                if t2 is not None:        # 연속 alert 처리
+                    if t2:
+                        last_msg = t2
+                    continue
+                try:
+                    url = driver.current_url.lower()
+                except Exception:
+                    time.sleep(0.4)
+                    continue
+                if "login_otp" in url:
+                    raise RuntimeError("이 계정은 OTP(2단계) 인증이 설정되어 자동 로그인할 수 없습니다. "
+                                       "Wizfasta에서 OTP를 해제하거나 직접 로그인하세요.")
+                if "passwordcampaign" in url:
+                    raise RuntimeError("비밀번호 변경 안내 페이지로 이동했습니다. Wizfasta에 직접 로그인해 "
+                                       "비밀번호 절차를 완료한 뒤 다시 시도하세요.")
+                if "login" not in url:     # 로그인 페이지를 벗어남 = 성공
+                    step("login", "로그인 성공")
+                    return
+                time.sleep(0.4)
+            # 여유시간 내 리다이렉트 없음 → 로그인 실패(자격증명 오류 등)
+            raise RuntimeError("Wizfasta 로그인 실패: " +
+                               (last_msg or "업체코드 / 아이디 / 비밀번호를 확인하세요."))
+
+        # alert 가 아직 없음 → 즉시 리다이렉트(세션 유지 등) 여부 확인
+        try:
+            url = driver.current_url.lower()
+        except Exception:
+            time.sleep(0.3)
+            continue
+        if url and "login" not in url:
+            step("login", "로그인 성공")
+            return
+        time.sleep(0.4)
 
 
 def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
@@ -287,45 +395,58 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
         # 로그인 화면으로 이동 후 자동 로그인
         step("login", "로그인 화면 이동")
         guard(driver)
-        driver.get(LOGIN_URL)
-        time.sleep(1)
+        try:
+            driver.get(LOGIN_URL)
+        except Exception:
+            pass   # 페이지 로드 타임아웃이어도 폼은 떠 있을 수 있음 → 계속 진행
+        time.sleep(0.5)
+
         if "login" in driver.current_url.lower():
-            step("login", "자동 로그인 중")
             if not (corp and uid and pw):
-                raise RuntimeError("Wizfasta 로그인 정보가 없습니다. [설정]에서 입력하세요.")
-            res = driver.execute_script(_LOGIN_JS, corp, uid, pw)
-            if res == "no-form":
-                raise RuntimeError("Wizfasta 로그인 폼을 찾지 못했습니다.")
-            # 로그인 완료(리다이렉트) 대기
-            while "login" in driver.current_url.lower():
-                guard(driver)
-                time.sleep(1)
-            driver.get(PRDDB_URL)
-            time.sleep(1.5)
+                raise RuntimeError("Wizfasta 로그인 정보가 없습니다. "
+                                   "[설정]에서 업체코드 / 아이디 / 비밀번호를 입력하세요.")
+            _login_wizfasta(driver, corp, uid, pw, step, guard)
         else:
             step("login", "세션 유지")
 
         if "PrdDbList" not in driver.current_url:
-            driver.get(PRDDB_URL)
+            guard(driver)
+            try:
+                driver.get(PRDDB_URL)
+            except Exception:
+                pass
             time.sleep(1.5)
 
-        step("query")
+        step("query", "상품DB 조회")
         guard(driver)
         driver.execute_script(_SETUP_JS)
         grid_n = 0
-        while True:
+        for _ in range(40):          # 조회 결과(그리드) 로드 대기 — 전체 타임아웃은 guard 가 적용
             guard(driver)
-            time.sleep(1.5)
+            time.sleep(0.8)
             grid_n = driver.execute_script(_GRID_LEN_JS) or 0
             if grid_n:
                 break
         step("query", f"{grid_n}건")
 
-        step("download", "시작")
+        # 조회 시점에 그리드(window.whus_data.grid)에 모델명·브랜드·원가·재고가 모두 로드된다.
+        # headless 환경에서 '전체 엑셀 다운로드'는 브라우저가 차단할 수 있어, 그리드 직접 추출을
+        # 기본 경로로 사용한다(빠르고 안정적). 그리드가 비어 있을 때만 엑셀 다운로드로 폴백.
+        step("download", "상품 데이터 수집")
+        guard(driver)
+        data = driver.execute_script(_GRID_EXTRACT_JS)
+        rows = _json.loads(data) if data else []
+        if rows:
+            step("download", f"{len(rows)}건 수집")
+            step("parse", f"{len(rows)}건")
+            return rows
+
+        # 폴백: 그리드가 비어 있으면 '전체 엑셀 다운로드' 시도(최대 30초)
+        step("download", "엑셀 다운로드 시도")
         driver.execute_script(_EXCEL_CLICK_JS)
         xlsx = None
         start = time.time()
-        while True:
+        while time.time() - start < 30:
             guard(driver)
             time.sleep(1.5)
             files = [f for f in glob.glob(os.path.join(dl_dir, "*"))
@@ -342,15 +463,10 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
         step("parse")
         if xlsx:
             rows = _parse_xlsx(xlsx)
-            if rows:
-                step("parse", f"{len(rows)}건 (엑셀)")
-                return rows
-
-        # 폴백: 그리드 추출
-        data = driver.execute_script(_GRID_EXTRACT_JS)
-        rows = _json.loads(data) if data else []
-        step("parse", f"{len(rows)}건 (그리드)")
-        return rows
+            step("parse", f"{len(rows)}건 (엑셀)")
+            return rows
+        step("parse", "0건")
+        return []
     finally:
         try:
             driver.quit()

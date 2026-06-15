@@ -51,7 +51,7 @@ WIZ_STEPS = [
     ("start", "Chrome 시작"),
     ("login", "Wizfasta 로그인"),
     ("query", "상품DB 조회 (일반상품·재고≥1)"),
-    ("download", "전체 엑셀 다운로드"),
+    ("download", "상품 데이터 수집"),
     ("parse", "데이터 파싱"),
     ("match", "모델명 매칭"),
 ]
