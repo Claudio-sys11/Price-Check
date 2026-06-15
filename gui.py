@@ -56,6 +56,13 @@ ROW_ALT = "#f5fbf9"     # 표 줄무늬(홀수행, 민트 기운)
 SUBTOTAL_BG = "#d7f5ed"  # 소계 행 강조(민트)
 SELECT_BG = "#a7e8da"   # 표 선택행(민트)
 
+# 프리미엄(고급) 톤
+HEADER_DARK = "#0b5c54"   # 헤더 그라데이션 진한 쪽(딥 틸)
+GOLD = "#c9a227"          # 고급 포인트(골드)
+GOLD_SOFT = "#ecd9a0"
+INK = "#0f1f1c"           # 깊은 먹빛 텍스트
+HAIRLINE = "#e7edeb"      # 얇은 구분선
+
 # 라운드(동글) UI 색상
 TAB_INACTIVE = "#dbe7e3"        # 비활성 탭 알약 배경(연한 민트회색)
 TAB_INACTIVE_HOVER = "#cbe0d9"  # 비활성 탭 hover
@@ -206,6 +213,24 @@ def fill_tree(tree: ttk.Treeview, rows: list[dict],
 
 
 # ===================== 동글동글(라운드) UI 컴포넌트 =====================
+def _hex_rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _paint_h_gradient(canvas, w, h, c1, c2, step=2):
+    """캔버스에 가로 방향 그라데이션을 그린다(c1 → c2)."""
+    r1, g1, b1 = _hex_rgb(c1)
+    r2, g2, b2 = _hex_rgb(c2)
+    w = max(1, int(w))
+    for x in range(0, w, step):
+        t = x / (w - 1) if w > 1 else 0
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
+        canvas.create_line(x, 0, x, h, fill=f"#{r:02x}{g:02x}{b:02x}", width=step)
+
+
 def _round_rect_points(x1, y1, x2, y2, r):
     """둥근 사각형을 그릴 다각형 좌표(smooth=True 와 함께 사용)."""
     r = max(0, min(r, (x2 - x1) / 2, (y2 - y1) / 2))
@@ -479,30 +504,38 @@ export_rows_csv = export_rows_excel
 
 
 class Splash(tk.Toplevel):
-    """실행 시 표시되는 로딩 화면.
+    """실행 시 표시되는 프리미엄 로딩 화면(둥근 모서리).
 
-    EcountERP·Wizfasta 로고를 배치하고, 업데이트 설치 시 진행률(0~100%)을 상태바로 표시.
+    EcountERP·Wizfasta 로고를 배치하고, 업데이트 설치 시 진행률(0~100%)을 표시.
+    Windows 의 -transparentcolor 로 카드 밖(모서리)을 투명 처리해 둥근 창을 만든다.
     """
+
+    KEY = "#FF00FE"   # 투명 처리용 키 컬러(콘텐츠에 쓰지 않는 색)
 
     def __init__(self, parent, status: str = "로딩 중…"):
         super().__init__(parent)
         self.overrideredirect(True)
-        self.configure(bg=ACCENT)
-        w, h = 520, 300
+        self._cw, self._ch = 560, 340
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+        self.geometry(f"{self._cw}x{self._ch}+{(sw - self._cw) // 2}+{(sh - self._ch) // 2}")
         try:
             self.attributes("-topmost", True)
         except tk.TclError:
             pass
+        bg = "white"
+        try:
+            self.attributes("-transparentcolor", self.KEY)   # 모서리 투명 → 둥근 창
+            self.configure(bg=self.KEY)
+            bg = self.KEY
+        except tk.TclError:
+            self.configure(bg="white")
 
-        card = tk.Frame(self, bg="white")
-        card.place(x=12, y=12, width=w - 24, height=h - 24)
-        tk.Frame(card, bg=ACCENT, height=10).pack(fill="x")    # 상단 민트 띠
+        w, h = self._cw, self._ch
+        c = tk.Canvas(self, width=w, height=h, bg=bg, highlightthickness=0, bd=0)
+        c.pack(fill="both", expand=True)
+        self.canvas = c
 
-        # 로고 행: EcountERP(흰 배경) × Wizfasta(어두운 칩 — 흰/노랑 로고 가독성)
-        logo_row = tk.Frame(card, bg="white")
-        logo_row.pack(pady=(42, 0))
+        # 로고 이미지
         self._img_ec = None
         self._img_wz = None
         try:
@@ -511,38 +544,46 @@ class Splash(tk.Toplevel):
         except tk.TclError:
             self._img_ec = self._img_wz = None
 
+        # 카드(둥근 흰색) + 얇은 보더 + 상단 골드 악센트
+        m, rad = 8, 32
+        c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
+                         fill="white", outline=HAIRLINE, width=1, smooth=True)
+        c.create_polygon(_round_rect_points(w // 2 - 28, m + 16, w // 2 + 28, m + 21, 2),
+                         fill=GOLD, outline="", smooth=True)
+
+        # 로고 행
+        cy = 124
         if self._img_ec is not None and self._img_wz is not None:
-            tk.Label(logo_row, image=self._img_ec, bg="white").pack(side="left", padx=(0, 16))
-            tk.Label(logo_row, text="×", bg="white", fg=ACCENT,
-                     font=(FONT, 17, "bold")).pack(side="left", padx=(0, 16))
-            tk.Label(logo_row, image=self._img_wz, bg="white").pack(side="left")  # 흰 배경
-        else:   # 이미지 로드 실패 시 텍스트 폴백
-            tk.Label(logo_row, text="EcountERP  ×  Wizfasta", bg="white",
-                     fg=ACCENT_ACTIVE, font=(FONT, 18, "bold")).pack()
+            ew, wzw = self._img_ec.width(), self._img_wz.width()
+            gap, xw = 24, 18
+            total = ew + gap + xw + gap + wzw
+            x = (w - total) // 2
+            c.create_image(x + ew // 2, cy, image=self._img_ec)
+            c.create_text(x + ew + gap + xw // 2, cy, text="×", fill="#c2cecb", font=(FONT, 16))
+            c.create_image(x + ew + gap + xw + gap + wzw // 2, cy, image=self._img_wz)
+        else:
+            c.create_text(w // 2, cy, text="EcountERP  ×  Wizfasta",
+                          fill=ACCENT_ACTIVE, font=(FONT, 18, "bold"))
 
-        tk.Label(card, text=f"v{APP_VERSION}  ·  THE FEEL KOREA CO.,LTD.", bg="white",
-                 fg=MUTED, font=(FONT, 9)).pack(pady=(18, 0))
+        # 구분선 + 버전 · 게시자
+        c.create_line(w // 2 - 160, 168, w // 2 + 160, 168, fill=HAIRLINE)
+        c.create_text(w // 2, 192, text=f"VERSION {APP_VERSION}", fill=GOLD,
+                      font=(FONT, 9, "bold"))
+        c.create_text(w // 2, 212, text="T H E   F E E L   K O R E A   C O . , L T D .",
+                      fill="#aab4b1", font=(FONT, 8))
 
-        # 상태 + 스피너
-        self._status = tk.StringVar(value=status)
-        self._spin = tk.StringVar(value=SPINNER[0])
-        srow = tk.Frame(card, bg="white")
-        srow.pack(pady=(18, 0))
-        tk.Label(srow, textvariable=self._spin, bg="white", fg=ACCENT,
-                 font=(FONT, 12, "bold")).pack(side="left", padx=(0, 8))
-        tk.Label(srow, textvariable=self._status, bg="white", fg=SUBTLE,
-                 font=(FONT, 10)).pack(side="left")
+        # 상태 + 스피너(단일 텍스트, 가운데)
+        self._status_text = status
+        self._status_id = c.create_text(w // 2, 252, text=f"{SPINNER[0]}   {status}",
+                                        fill="#5b6b67", font=(FONT, 10))
 
-        # 진행률 바(설치/다운로드 시에만 표시)
+        # 진행률 바(다운로드/설치 시 생성)
         self._pct = 0.0
-        self._show_bar = False
-        self._pctvar = tk.StringVar(value="")
-        self._bar_wrap = tk.Frame(card, bg="white")
-        self._barc = tk.Canvas(self._bar_wrap, width=360, height=14,
-                               bg="white", highlightthickness=0)
-        self._barc.pack(side="left")
-        tk.Label(self._bar_wrap, textvariable=self._pctvar, bg="white", fg=ACCENT_ACTIVE,
-                 font=(FONT, 10, "bold"), width=5, anchor="w").pack(side="left", padx=(8, 0))
+        self._bar_made = False
+        self._pct_id = None
+        self._bw, self._bh = 340, 10
+        self._bx = (w - self._bw) // 2
+        self._by = 284
 
         self._anim_on = True
         self._i = 0
@@ -554,43 +595,47 @@ class Splash(tk.Toplevel):
             pass
 
     def set_status(self, msg: str) -> None:
+        self._status_text = msg
         try:
-            self._status.set(msg)
+            self.canvas.itemconfigure(
+                self._status_id, text=f"{SPINNER[self._i % len(SPINNER)]}   {msg}")
         except tk.TclError:
             pass
 
     def set_progress(self, pct: float) -> None:
-        """진행률(0~100%)을 상태바로 표시한다."""
         self._pct = max(0.0, min(100.0, float(pct)))
+        c = self.canvas
         try:
-            self._pctvar.set(f"{int(round(self._pct))}%")
+            if not self._bar_made:
+                c.create_polygon(
+                    _round_rect_points(self._bx, self._by, self._bx + self._bw,
+                                       self._by + self._bh, self._bh // 2),
+                    fill="#edf1f0", outline="", smooth=True, tags=("bartrack",))
+                self._pct_id = c.create_text(
+                    self._bx + self._bw + 28, self._by + self._bh // 2,
+                    text="0%", fill=ACCENT_ACTIVE, font=(FONT, 9, "bold"))
+                self._bar_made = True
+            c.delete("barfill")
+            fw = int(self._bw * self._pct / 100)
+            if fw >= 2:
+                rr = min(self._bh / 2, fw / 2)
+                c.create_polygon(
+                    _round_rect_points(self._bx, self._by, self._bx + fw,
+                                       self._by + self._bh, rr),
+                    fill=ACCENT, outline="", smooth=True, tags=("barfill",))
+            c.itemconfigure(self._pct_id, text=f"{int(round(self._pct))}%")
         except tk.TclError:
-            return
-        if not self._show_bar:
-            self._show_bar = True
-            self._bar_wrap.pack(pady=(14, 0))
-        self._draw_bar()
-
-    def _draw_bar(self) -> None:
-        c = self._barc
-        try:
-            c.delete("all")
-        except tk.TclError:
-            return
-        bw, bh, r = 360, 14, 7
-        c.create_polygon(_round_rect_points(1, 1, bw - 1, bh - 1, r),
-                         fill="#e5e7eb", outline="", smooth=True)
-        fw = int(bw * self._pct / 100)
-        if fw >= 2:
-            rr = min(r, fw / 2)
-            c.create_polygon(_round_rect_points(1, 1, fw, bh - 1, rr),
-                             fill=ACCENT, outline="", smooth=True)
+            pass
 
     def _tick(self) -> None:
         if not self._anim_on:
             return
-        self._spin.set(SPINNER[self._i % len(SPINNER)])
         self._i += 1
+        try:
+            self.canvas.itemconfigure(
+                self._status_id, text=f"{SPINNER[self._i % len(SPINNER)]}   {self._status_text}")
+        except tk.TclError:
+            pass
         self.after(120, self._tick)
 
     def close(self) -> None:
@@ -740,17 +785,30 @@ class App(tk.Tk):
                   foreground=[("selected", "#0f3d36")])
 
     def _build_header(self) -> None:
-        bar = tk.Frame(self, bg=ACCENT, height=60)
-        bar.pack(fill="x")
-        bar.pack_propagate(False)
-        inner = tk.Frame(bar, bg=ACCENT)
-        inner.pack(fill="both", expand=True, padx=18)
-        tk.Label(inner, text="실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교",
-                 bg=ACCENT, fg="white", font=(FONT, 15, "bold")).pack(side="left", pady=12)
-        tk.Label(inner, text=f"v{APP_VERSION}", bg=ACCENT, fg=ACCENT_SOFT,
-                 font=(FONT, 10)).pack(side="left", padx=10, pady=16)
-        tk.Label(inner, text="설정 ▸ 인증 정보에서 키를 입력하세요", bg=ACCENT, fg=ACCENT_SOFT,
-                 font=(FONT, 9)).pack(side="right", pady=18)
+        self._header_h = 66
+        self._header = tk.Canvas(self, height=self._header_h, highlightthickness=0, bd=0)
+        self._header.pack(fill="x")
+        self._header.bind("<Configure>", self._draw_header)
+
+    def _draw_header(self, event=None) -> None:
+        c = self._header
+        w = (event.width if event else c.winfo_width()) or 1120
+        h = self._header_h
+        c.delete("all")
+        # 딥 틸 → 민트 그라데이션 + 하단 골드 헤어라인
+        _paint_h_gradient(c, w, h, HEADER_DARK, ACCENT)
+        c.create_rectangle(0, h - 3, w, h, fill=GOLD, outline="")
+        # 좌측 골드 악센트 바
+        c.create_rectangle(20, h // 2 - 11, 24, h // 2 + 11, fill=GOLD, outline="")
+        title = "실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교"
+        c.create_text(38, h // 2, anchor="w", text=title, fill="white",
+                      font=(FONT, 15, "bold"))
+        tw = tkfont.Font(family=FONT, size=15, weight="bold").measure(title)
+        c.create_text(38 + tw + 14, h // 2 + 1, anchor="w", text=f"v{APP_VERSION}",
+                      fill=GOLD_SOFT, font=(FONT, 10))
+        c.create_text(w - 20, h // 2, anchor="e",
+                      text="설정 ▸ 인증 정보에서 API 키를 입력하세요",
+                      fill=ACCENT_SOFT, font=(FONT, 9))
 
     # ================= 상단 메뉴 / 설정 =================
     def _build_menu(self) -> None:
