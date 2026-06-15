@@ -7,7 +7,7 @@
 
 #define MyAppId "8F3C2A91-7B4D-4E26-9A1F-EC0A17E5C001"
 #define MyAppName "EcountERP 재고현황 조회"
-#define MyAppVersion "1.0.22"
+#define MyAppVersion "1.0.23"
 #define MyAppPublisher "EcountInventory"
 #define MyAppExeName "EcountInventory.exe"
 

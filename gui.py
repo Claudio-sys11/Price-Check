@@ -286,10 +286,14 @@ class App(tk.Tk):
         style.configure("TCheckbutton", background=BG, foreground=TEXT)
         # 노트북 탭
         style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(6, 6, 6, 0))
+        # 비활성 탭은 작게, 활성(선택) 탭은 크게
         style.configure("TNotebook.Tab", background="#e5e7eb", foreground=MUTED,
-                        padding=(18, 9), font=(FONT, 10, "bold"), borderwidth=0)
-        style.map("TNotebook.Tab", background=[("selected", CARD)],
-                  foreground=[("selected", ACCENT)])
+                        padding=(12, 5), font=(FONT, 9), borderwidth=0)
+        style.map("TNotebook.Tab",
+                  background=[("selected", CARD)],
+                  foreground=[("selected", ACCENT)],
+                  padding=[("selected", (26, 12))],
+                  font=[("selected", (FONT, 13, "bold"))])
         # 표(Treeview)
         style.configure("Treeview", background="white", fieldbackground="white",
                         foreground=TEXT, rowheight=29, font=(FONT, 10), borderwidth=0)
@@ -305,8 +309,8 @@ class App(tk.Tk):
         bar.pack_propagate(False)
         inner = tk.Frame(bar, bg=ACCENT)
         inner.pack(fill="both", expand=True, padx=18)
-        tk.Label(inner, text="EcountERP 재고현황 · Wizfasta 가격비교", bg=ACCENT, fg="white",
-                 font=(FONT, 15, "bold")).pack(side="left", pady=12)
+        tk.Label(inner, text="실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교",
+                 bg=ACCENT, fg="white", font=(FONT, 15, "bold")).pack(side="left", pady=12)
         tk.Label(inner, text=f"v{APP_VERSION}", bg=ACCENT, fg=ACCENT_SOFT,
                  font=(FONT, 10)).pack(side="left", padx=10, pady=16)
         tk.Label(inner, text="설정 ▸ 인증 정보에서 키를 입력하세요", bg=ACCENT, fg=ACCENT_SOFT,
@@ -515,15 +519,18 @@ class App(tk.Tk):
         self._wiz_rows: list[dict] = []
 
         ttk.Label(root, style="Muted.TLabel",
-                  text="① 재고현황 탭에서 조회 후 → ② [Wizfasta 원가 가져오기]로 Chrome에서 상품DB 원가를 받아 "
-                       "모델명으로 비교합니다. (Wizfasta 최초 1회 로그인 필요)"
+                  text="① 재고현황 탭에서 조회 후 → ② [Wizfasta 원가 가져오기]로 상품DB 원가를 받아 "
+                       "모델명으로 비교합니다. (60초 초과 시 자동 재시작 / [중단]으로 멈춤)"
                   ).pack(fill="x", padx=16, pady=(12, 2))
 
         btns = ttk.Frame(root)
         btns.pack(fill="x", padx=16, pady=(4, 6))
-        self.btn_wiz = ttk.Button(btns, text="🛒  Wizfasta 원가 가져오기 (Chrome)",
+        self.btn_wiz = ttk.Button(btns, text="🛒  Wizfasta 원가 가져오기",
                                   style="Accent.TButton", command=self._on_fetch_wizfasta)
         self.btn_wiz.pack(side="left")
+        self.btn_wiz_stop = ttk.Button(btns, text="■ 중단", command=self._on_stop_wizfasta,
+                                       state="disabled")
+        self.btn_wiz_stop.pack(side="left", padx=8)
         self.btn_cmp_csv = ttk.Button(btns, text="비교결과 CSV 내보내기",
                                       command=lambda: export_rows_csv(self._compare_rows, "price_compare.csv"),
                                       state="disabled")
@@ -621,12 +628,20 @@ class App(tk.Tk):
                 "[설정] → 'Wizfasta 로그인'에 업체코드·아이디·비밀번호를 입력해 주세요.")
             return
         self._reset_steps()
+        self._wiz_stop = threading.Event()
         self.btn_wiz.configure(state="disabled")
+        self.btn_wiz_stop.configure(state="normal")
         self.btn_cmp_csv.configure(state="disabled")
         self.cmp_status.set("진행 중…")
         self._set_step("start", "Chrome 준비")
         self._start_anim()   # 실시간 활동 표시(블로킹 단계에서도 멈춘 듯 보이지 않게)
         threading.Thread(target=self._do_fetch_wizfasta, args=(corp, uid, pw), daemon=True).start()
+
+    def _on_stop_wizfasta(self) -> None:
+        if getattr(self, "_wiz_stop", None):
+            self._wiz_stop.set()
+        self.cmp_status.set("중단 요청 중…")
+        self.btn_wiz_stop.configure(state="disabled")
 
     def _do_fetch_wizfasta(self, corp: str, uid: str, pw: str) -> None:
         try:
@@ -634,15 +649,41 @@ class App(tk.Tk):
         except Exception as exc:  # noqa: BLE001
             self.after(0, lambda: self._wiz_failed(f"Selenium 모듈 로드 실패: {exc}"))
             return
-        try:
-            rows = wizfasta_selenium.fetch_wizfasta_costs(
-                corp, uid, pw,
-                progress=lambda key, detail="": self.after(0, lambda k=key, d=detail: self._set_step(k, d)),
-                headless=False, start_timeout=60)
-        except Exception as exc:  # noqa: BLE001
-            self.after(0, lambda: self._wiz_failed(f"Wizfasta 가져오기 실패: {exc}"))
+        prog = lambda key, detail="": self.after(0, lambda k=key, d=detail: self._set_step(k, d))
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            if self._wiz_stop.is_set():
+                self.after(0, self._wiz_cancelled)
+                return
+            try:
+                rows = wizfasta_selenium.fetch_wizfasta_costs(
+                    corp, uid, pw, progress=prog, headless=True,
+                    start_timeout=60, overall_timeout=60,
+                    should_stop=lambda: self._wiz_stop.is_set())
+            except wizfasta_selenium.FetchStopped:
+                self.after(0, self._wiz_cancelled)
+                return
+            except (wizfasta_selenium.FetchTimeout, TimeoutError):
+                # 60초 초과 → 재시작
+                self.after(0, lambda a=attempt: (self._reset_steps(),
+                                                 self.cmp_status.set(f"60초 초과 — 재시작 {a}/{max_attempts}…"),
+                                                 self._set_step("start", "재시작")))
+                continue
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda e=exc: self._wiz_failed(f"Wizfasta 가져오기 실패: {e}"))
+                return
+            self.after(0, lambda r=rows: self._wiz_done(r))
             return
-        self.after(0, lambda: self._wiz_done(rows))
+        self.after(0, lambda: self._wiz_failed("60초 내 완료되지 않아 재시작을 반복했습니다. 잠시 후 다시 시도하세요."))
+
+    def _wiz_cancelled(self) -> None:
+        self._stop_anim()
+        if self._active_step:
+            lb, label = self._step_labels[self._active_step]
+            lb.configure(text=f"■  {label} (중단됨)", foreground="#6b7280")
+        self.btn_wiz.configure(state="normal")
+        self.btn_wiz_stop.configure(state="disabled")
+        self.cmp_status.set("중단됨 — 다시 실행할 수 있습니다.")
 
     def _wiz_failed(self, msg: str) -> None:
         self._stop_anim()
@@ -650,11 +691,13 @@ class App(tk.Tk):
             lb, label = self._step_labels[self._active_step]
             lb.configure(text=f"❌  {label}", foreground="#dc2626")
         self.btn_wiz.configure(state="normal")
+        self.btn_wiz_stop.configure(state="disabled")
         self.cmp_status.set("실패")
         messagebox.showerror("Wizfasta 가져오기 실패", msg)
 
     def _wiz_done(self, wiz_rows: list[dict]) -> None:
         self.btn_wiz.configure(state="normal")
+        self.btn_wiz_stop.configure(state="disabled")
         self._wiz_rows = wiz_rows or []
         if not self._wiz_rows:
             self._stop_anim()

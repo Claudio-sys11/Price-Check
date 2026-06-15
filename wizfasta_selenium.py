@@ -23,6 +23,14 @@ PRDDB_URL = "https://www.wizfasta.com/ProductMng/PrdDbList.aspx"
 LOGIN_URL = "https://www.wizfasta.com/Login/Login.aspx"
 
 
+class FetchStopped(Exception):
+    """사용자가 중단(취소)한 경우."""
+
+
+class FetchTimeout(Exception):
+    """전체 제한시간(기본 60초) 초과 — 재시작 대상."""
+
+
 def _kill_chromedriver() -> None:
     """멈춘 chromedriver만 정리(사용자의 일반 Chrome 창은 건드리지 않음)."""
     try:
@@ -197,20 +205,39 @@ b.click(); return 'submitted';
 
 
 def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
-                         progress=None, headless: bool = False,
-                         start_timeout: int = 60) -> list[dict]:
+                         progress=None, headless: bool = True,
+                         start_timeout: int = 60, overall_timeout: int = 60,
+                         should_stop=None) -> list[dict]:
     """상품DB 전체 엑셀을 받아 모델명·원가를 추출(실패 시 그리드 폴백).
 
     corp/uid/pw 가 주어지면 Wizfasta에 자동 로그인한다. progress(step_key, detail)
     콜백으로 체크리스트 단계를 보고한다(step_key: start/login/query/download/parse).
+    should_stop() 가 True면 즉시 중단(FetchStopped), 전체 overall_timeout 초과 시 FetchTimeout.
     """
     import json as _json
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
 
+    _t0 = time.time()
+
     def step(key, detail=""):
         if progress:
             progress(key, detail)
+
+    def guard(driver=None):
+        """중단/전체 타임아웃 점검 — 해당 시 드라이버 정리 후 예외."""
+        stop = should_stop and should_stop()
+        over = (time.time() - _t0) > overall_timeout
+        if stop or over:
+            if driver is not None:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+            _kill_chromedriver()
+            if stop:
+                raise FetchStopped("사용자가 중단했습니다.")
+            raise FetchTimeout(f"{overall_timeout}초 초과")
 
     dl_dir = _appdir("wiz_download")
     for f in glob.glob(os.path.join(dl_dir, "*")):
@@ -252,8 +279,14 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
         except Exception:
             pass
 
+        try:
+            driver.set_page_load_timeout(25)   # 페이지 로드 무한 대기 방지
+        except Exception:
+            pass
+
         # 로그인 화면으로 이동 후 자동 로그인
         step("login", "로그인 화면 이동")
+        guard(driver)
         driver.get(LOGIN_URL)
         time.sleep(1)
         if "login" in driver.current_url.lower():
@@ -264,11 +297,9 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
             if res == "no-form":
                 raise RuntimeError("Wizfasta 로그인 폼을 찾지 못했습니다.")
             # 로그인 완료(리다이렉트) 대기
-            ldl = time.time() + 30
-            while "login" in driver.current_url.lower() and time.time() < ldl:
+            while "login" in driver.current_url.lower():
+                guard(driver)
                 time.sleep(1)
-            if "login" in driver.current_url.lower():
-                raise RuntimeError("Wizfasta 로그인 실패 — 업체코드/아이디/비밀번호를 확인하세요.")
             driver.get(PRDDB_URL)
             time.sleep(1.5)
         else:
@@ -279,10 +310,11 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
             time.sleep(1.5)
 
         step("query")
+        guard(driver)
         driver.execute_script(_SETUP_JS)
-        gdeadline = time.time() + 60
         grid_n = 0
-        while time.time() < gdeadline:
+        while True:
+            guard(driver)
             time.sleep(1.5)
             grid_n = driver.execute_script(_GRID_LEN_JS) or 0
             if grid_n:
@@ -293,8 +325,8 @@ def fetch_wizfasta_costs(corp: str = "", uid: str = "", pw: str = "",
         driver.execute_script(_EXCEL_CLICK_JS)
         xlsx = None
         start = time.time()
-        wdeadline = start + 180
-        while time.time() < wdeadline:
+        while True:
+            guard(driver)
             time.sleep(1.5)
             files = [f for f in glob.glob(os.path.join(dl_dir, "*"))
                      if f.lower().endswith((".xlsx", ".xls"))]
