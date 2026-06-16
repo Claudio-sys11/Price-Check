@@ -236,7 +236,7 @@ def build_cost_comparison(
             is_unmatched_brand = any(ub and ub in str(brand).lower()
                                      for ub in UNMATCHED_BRANDS)
             if is_bag:
-                prio, tag, bigo = 1, "nostock", "쇼핑백"
+                prio, tag, bigo = 2, "unmatched", "쇼핑백"   # 미매칭으로 분류(비고는 쇼핑백)
             elif is_unmatched_brand:
                 prio, tag, bigo = 2, "unmatched", ""
             else:
