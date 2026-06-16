@@ -601,15 +601,17 @@ class Splash(tk.Toplevel):
                           fill=ACCENT_ACTIVE, font=(FONT, 18, "bold"))
 
         # 구분선 + 버전 · 게시자
-        c.create_line(w // 2 - 160, 168, w // 2 + 160, 168, fill=HAIRLINE)
-        c.create_text(w // 2, 192, text=f"VERSION {APP_VERSION}", fill=GOLD,
+        c.create_line(w // 2 - 160, 166, w // 2 + 160, 166, fill=HAIRLINE)
+        c.create_text(w // 2, 188, text=f"VERSION {APP_VERSION}", fill=GOLD,
                       font=(FONT, 9, "bold"))
-        c.create_text(w // 2, 212, text="T H E   F E E L   K O R E A   C O . , L T D .",
+        c.create_text(w // 2, 207, text="T H E   F E E L   K O R E A   C O . , L T D .",
                       fill="#aab4b1", font=(FONT, 8))
+        c.create_text(w // 2, 223, text="Made by Claudio Lim",
+                      fill="#c2c9c6", font=(FONT, 8))
 
         # 상태 + 스피너(단일 텍스트, 가운데)
         self._status_text = status
-        self._status_id = c.create_text(w // 2, 252, text=f"{SPINNER[0]}   {status}",
+        self._status_id = c.create_text(w // 2, 254, text=f"{SPINNER[0]}   {status}",
                                         fill="#5b6b67", font=(FONT, 10))
 
         # 진행률 바(다운로드/설치 시 생성)
