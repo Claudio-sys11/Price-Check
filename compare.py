@@ -140,6 +140,26 @@ def normalize_model(s: Any) -> str:
     return t
 
 
+def model_codes(s: Any, minlen: int = 5) -> set:
+    """모델명에서 매칭에 쓸 코드 토큰을 추출한다.
+
+    '81214671 (80842091)' 처럼 괄호 안에 다른(원본) 코드가 들어있는 경우,
+    괄호 안 코드와 괄호 밖 코드, 전체 정규화를 모두 토큰으로 본다.
+    → Wizfasta '80842091' 과 EcountERP '81214671 (80842091)' 을 같은 모델로 매칭.
+    """
+    raw = str(s or "")
+    parts = re.findall(r"\(([^)]*)\)", raw)          # 괄호 안
+    main = re.sub(r"\([^)]*\)", " ", raw)            # 괄호 제거 본문
+    codes = set()
+    for p in [main, *parts, raw]:
+        n = normalize_model(p)
+        # 정규화 후 괄호 등 기호 제거
+        n = re.sub(r"[^0-9A-Z가-힣]", "", n)
+        if len(n) >= minlen:
+            codes.add(n)
+    return codes
+
+
 # 원가비교 비고/분류 특수 규칙 (사이트 상황에 맞춰 조정 가능)
 SHOPPING_BAG_MODELS = ["BURBERRY LARGE", "MONTBLANC WH SMALL"]   # 비고 "쇼핑백"
 UNMATCHED_BRANDS = ["balmain"]   # 미입고 중 이 브랜드는 '미매칭'으로(비고 비움)
@@ -165,12 +185,14 @@ def build_cost_comparison(
           | 파스타재고 | 실재고(ERP) | 재고차이 | 매칭 | 비고
     ERP 실재고가 없는(매칭 X 또는 재고 0) 행은 비고="미입고 상품"으로 표기한다.
     """
-    # EcountERP: 정규화 모델명별 그룹(가중 평균원가 + 재고합)
+    # EcountERP: 정규화 모델명별 그룹(가중 평균원가 + 재고합) + 코드 토큰 인덱스
     ec_groups: dict[str, dict] = {}       # norm -> {amt, qty, prices}
+    code_index: dict[str, set] = {}       # 코드 토큰 -> {norm, ...}
     for e in ecount_rows:
         if e.get("_subtotal"):
             continue
-        k = normalize_model(e.get("모델명"))
+        model = e.get("모델명")
+        k = normalize_model(model)
         if not k:
             continue
         price = _to_number(e.get("입고단가"))
@@ -179,28 +201,35 @@ def build_cost_comparison(
         g["amt"] += price * qty
         g["qty"] += qty
         g["prices"].append(price)
+        for code in model_codes(model):          # 괄호 안/밖 코드까지 인덱싱
+            code_index.setdefault(code, set()).add(k)
     ec_keys = list(ec_groups.keys())
 
-    def match_keys(wnorm: str) -> list:
-        """wnorm 과 매칭되는 EcountERP 정규화 모델키 목록(정확 일치 우선, 없으면 포함)."""
+    def match_keys(wmodel) -> list:
+        """Wizfasta 모델명과 매칭되는 EcountERP 그룹키 목록.
+
+        1) 정확 일치 → 2) 코드 토큰(괄호 안/밖) 공유 → 3) 양방향 부분일치.
+        """
+        wnorm = normalize_model(wmodel)
         if not wnorm:
             return []
-        if wnorm in ec_groups:        # 정확 일치 우선
+        if wnorm in ec_groups:                    # 1) 정확 일치
             return [wnorm]
-        hits = []
-        for k in ec_keys:
-            shorter = k if len(k) <= len(wnorm) else wnorm
-            if len(shorter) < 5:      # 너무 짧은 코드는 오인식 방지
-                continue
-            if k in wnorm or wnorm in k:
-                hits.append(k)
-        return hits
+        keys = set()
+        for code in model_codes(wmodel):          # 2) 코드 토큰 공유
+            keys |= code_index.get(code, set())
+        if not keys:                              # 3) 부분일치 보강
+            for k in ec_keys:
+                shorter = k if len(k) <= len(wnorm) else wnorm
+                if len(shorter) >= 5 and (k in wnorm or wnorm in k):
+                    keys.add(k)
+        return list(keys)
 
     rows_raw = []
     for w in wizfasta_rows:
         wnorm = normalize_model(w.get("모델명"))
         wiz_cost = _to_number(w.get("원가"))
-        keys = match_keys(wnorm)
+        keys = match_keys(w.get("모델명"))
         matched = bool(keys)
         if matched:
             amt = sum(ec_groups[k]["amt"] for k in keys)
