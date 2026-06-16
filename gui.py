@@ -576,7 +576,7 @@ class Splash(tk.Toplevel):
         # 카드(둥근 흰색) + 얇은 보더 + 상단 골드 악센트
         m, rad = 8, 32
         c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
-                         fill="white", outline=HAIRLINE, width=1, smooth=True)
+                         fill="white", outline="", smooth=True)
         c.create_polygon(_round_rect_points(w // 2 - 28, m + 16, w // 2 + 28, m + 21, 2),
                          fill=GOLD, outline="", smooth=True)
 
@@ -728,7 +728,7 @@ class PremiumDialog(tk.Toplevel):
         # 카드(텍스트 뒤로) + 상단 악센트 + 제목 + 구분선
         m, rad = 6, 26
         card = c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
-                                fill="white", outline=HAIRLINE, width=1, smooth=True)
+                                fill="white", outline="", smooth=True)
         acc = c.create_polygon(_round_rect_points(m, m, w - m, m + 6, 3),
                                fill=accent, outline="", smooth=True)
         c.tag_lower(card, mid)
@@ -895,7 +895,7 @@ class PremiumMenu(tk.Toplevel):
         c = self.c
         c.delete("all")
         c.create_polygon(_round_rect_points(2, 2, self._mw - 2, self._mh - 2, 14),
-                         fill="white", outline=HAIRLINE, width=1, smooth=True)
+                         fill="white", outline="", smooth=True)
         y = self._pad
         for i, (t, _cmd) in enumerate(self._items):
             if t == "-":
@@ -1416,16 +1416,20 @@ class App(tk.Tk):
         chip_box = tk.Frame(self.cmp_summary, bg=BG)
         chip_box.pack(side="right")
         self._cmp_cat = None   # 대시보드 분류 필터(None=전체)
+        cw = 122
         self.chip_total = StatChip(chip_box, "전체 (Wiz)", fill="#e0f7f1", fg="#0f766e",
-                                   command=lambda: self._set_cmp_category(None))
+                                   cw=cw, command=lambda: self._set_cmp_category(None))
         self.chip_diff = StatChip(chip_box, "단가차이", fill=DIFF_BG, fg=DIFF_FG,
-                                  command=lambda: self._set_cmp_category("diff"))
+                                  cw=cw, command=lambda: self._set_cmp_category("diff"))
         self.chip_nostock = StatChip(chip_box, "미입고", fill="#fdeccb", fg="#8a5a0a",
-                                     command=lambda: self._set_cmp_category("nostock"))
+                                     cw=cw, command=lambda: self._set_cmp_category("nostock"))
+        self.chip_unmatch = StatChip(chip_box, "미매칭", fill=UNMATCH_BG, fg="#4b5563",
+                                     cw=cw, command=lambda: self._set_cmp_category("unmatched"))
         self.chip_same = StatChip(chip_box, "단가일치", fill="#d7f5ed", fg="#0d9488",
-                                  command=lambda: self._set_cmp_category("same"))
-        for c in (self.chip_total, self.chip_diff, self.chip_nostock, self.chip_same):
-            c.pack(side="left", padx=(10, 0))
+                                  cw=cw, command=lambda: self._set_cmp_category("same"))
+        for c in (self.chip_total, self.chip_diff, self.chip_nostock,
+                  self.chip_unmatch, self.chip_same):
+            c.pack(side="left", padx=(8, 0))
 
         # 검색 필터(브랜드·모델명) — 비교 결과를 부분일치로 즉시 필터
         self.var_cmp_brand = tk.StringVar()
@@ -1528,6 +1532,8 @@ class App(tk.Tk):
                 sh.highlight_rows([i], bg=DIFF_BG, fg=DIFF_FG, redraw=False)
             elif tag == "nostock":
                 sh.highlight_rows([i], bg="#fff4e0", fg="#8a5a0a", redraw=False)
+            elif tag == "unmatched":
+                sh.highlight_rows([i], bg=UNMATCH_BG, fg=UNMATCH_FG, redraw=False)
         # 금액·수량 컬럼 우측정렬, 매칭 컬럼 가운데 정렬
         money_cols = [ci for ci, h in enumerate(headers) if h in MONEY_COLS]
         if money_cols:
@@ -1839,15 +1845,18 @@ class App(tk.Tk):
         total = len(rows_bm)
         n_diff = sum(1 for r in rows_bm if r.get("_tag") == "diff")
         n_nostock = sum(1 for r in rows_bm if r.get("_tag") == "nostock")
+        n_unmatch = sum(1 for r in rows_bm if r.get("_tag") == "unmatched")
         n_same = sum(1 for r in rows_bm if r.get("_tag") == "same")
         self.chip_total.set_value(f"{total:,}")
         self.chip_diff.set_value(f"{n_diff:,}")
         self.chip_nostock.set_value(f"{n_nostock:,}")
+        self.chip_unmatch.set_value(f"{n_unmatch:,}")
         self.chip_same.set_value(f"{n_same:,}")
         # 선택된 분류 칩 강조
         self.chip_total.set_active(self._cmp_cat is None)
         self.chip_diff.set_active(self._cmp_cat == "diff")
         self.chip_nostock.set_active(self._cmp_cat == "nostock")
+        self.chip_unmatch.set_active(self._cmp_cat == "unmatched")
         self.chip_same.set_active(self._cmp_cat == "same")
 
         # 대시보드 분류 필터 적용 → 표 표시
@@ -1857,7 +1866,8 @@ class App(tk.Tk):
         self._fill_compare_sheet(rows)
 
         full = len(allrows)
-        catname = {"diff": "단가차이", "nostock": "미입고", "same": "단가일치"}.get(self._cmp_cat)
+        catname = {"diff": "단가차이", "nostock": "미입고",
+                   "unmatched": "미매칭", "same": "단가일치"}.get(self._cmp_cat)
         if catname:
             self.cmp_status.set(f"[{catname}] {len(rows):,}건 / 전체 {full:,}건")
         elif total == full:

@@ -140,6 +140,11 @@ def normalize_model(s: Any) -> str:
     return t
 
 
+# 원가비교 비고/분류 특수 규칙 (사이트 상황에 맞춰 조정 가능)
+SHOPPING_BAG_MODELS = ["BURBERRY LARGE", "MONTBLANC WH SMALL"]   # 비고 "쇼핑백"
+UNMATCHED_BRANDS = ["balmain"]   # 미입고 중 이 브랜드는 '미매칭'으로(비고 비움)
+
+
 def build_cost_comparison(
     wizfasta_rows: list[dict[str, Any]],
     ecount_rows: list[dict[str, Any]],
@@ -216,17 +221,30 @@ def build_cost_comparison(
         wiz_qty = _to_number(w.get("재고"))
         qty_diff = (wiz_qty - ec_qty) if (ec_qty is not None) else None
 
-        # 분류(ERP 실재고 없음=미입고 상품)
-        #   0: 단가차이(매칭 O·재고>0·차이 있음)  (상단)
-        #   1: 미입고(ERP 실재고 없음 또는 0)      (중간)
-        #   2: 단가일치(매칭 O·재고>0·차이 없음)   (하단)
+        # 분류
+        #   0: 단가차이(매칭 O·재고>0·차이 있음)
+        #   1: 미입고(ERP 실재고 없음/0) — 비고 "미입고 상품"(쇼핑백 모델은 "쇼핑백")
+        #   2: 미매칭(특정 브랜드 등) — 비고 비움
+        #   3: 단가일치(매칭 O·재고>0·차이 없음)
         no_stock = (not matched) or (ec_qty is None) or (int(round(ec_qty)) == 0)
+        brand = w.get("브랜드", "")
+        model = w.get("모델명", "")
         if no_stock:
-            prio, tag, bigo = 1, "nostock", "미입고 상품"
+            bnm = normalize_model(f"{brand} {model}")          # 브랜드+모델 정규화
+            is_bag = any(normalize_model(b) and normalize_model(b) in bnm
+                         for b in SHOPPING_BAG_MODELS)
+            is_unmatched_brand = any(ub and ub in str(brand).lower()
+                                     for ub in UNMATCHED_BRANDS)
+            if is_bag:
+                prio, tag, bigo = 1, "nostock", "쇼핑백"
+            elif is_unmatched_brand:
+                prio, tag, bigo = 2, "unmatched", ""
+            else:
+                prio, tag, bigo = 1, "nostock", "미입고 상품"
         elif has_diff:
             prio, tag, bigo = 0, "diff", ""
         else:
-            prio, tag, bigo = 2, "same", ""
+            prio, tag, bigo = 3, "same", ""
 
         rows_raw.append({
             "_prio": prio,
