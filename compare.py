@@ -261,9 +261,8 @@ def build_cost_comparison(
             "비고": bigo,
         })
 
-    # 우선순위(차이>미입고>일치) → 브랜드 → 모델명 순 정렬
-    rows_raw.sort(key=lambda r: (r["_prio"],
-                                 str(r["브랜드"] or "").upper(),
+    # 기본 정렬: 브랜드 → 모델명 오름차순 (UI 에서 헤더 클릭으로 재정렬 가능)
+    rows_raw.sort(key=lambda r: (str(r["브랜드"] or "").upper(),
                                  str(r["모델명"] or "").upper()))
     for r in rows_raw:
         r.pop("_prio", None)   # 표시·열에는 쓰지 않음(_tag 는 색상용으로 유지)

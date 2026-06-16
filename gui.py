@@ -429,6 +429,7 @@ class StatChip(tk.Canvas):
         self._radius = radius
         self._cw, self._ch = cw, ch
         self._value = "—"
+        self._pct = ""
         self._command = command
         self._active = False
         self.bind("<Configure>", lambda e: self._draw())
@@ -440,6 +441,10 @@ class StatChip(tk.Canvas):
 
     def set_value(self, value):
         self._value = str(value)
+        self._draw()
+
+    def set_pct(self, pct_text):
+        self._pct = str(pct_text or "")
         self._draw()
 
     def set_active(self, active):
@@ -455,7 +460,8 @@ class StatChip(tk.Canvas):
                                 fill="", outline=GOLD, width=3, smooth=True)
         self.create_text(self._cw // 2, self._ch // 2 - 9, text=self._value,
                          fill=self._fg, font=(FONT, 18, "bold"))
-        self.create_text(self._cw // 2, self._ch // 2 + 15, text=self._label,
+        label = self._label + (f"  {self._pct}" if self._pct else "")
+        self.create_text(self._cw // 2, self._ch // 2 + 15, text=label,
                          fill=self._fg, font=(FONT, 9, "bold"))
 
 
@@ -1469,7 +1475,11 @@ class App(tk.Tk):
             "column_width_resize", "double_click_column_resize",
             "right_click_popup_menu", "rc_select")
         self.sheet_cmp.pack(fill="both", expand=True, padx=1, pady=1)
-        self.sheet_cmp.extra_bindings("double_click_cell", self._on_cmp_sheet_double)
+        self._cmp_sort_col = None
+        self._cmp_sort_desc = False
+        # 모델명 셀 더블클릭 → 재고현황 조회 / 머리글 클릭 → 오름·내림 정렬 (캔버스 직접 바인딩)
+        self.sheet_cmp.MT.bind("<Double-Button-1>", self._on_cmp_cell_double, add="+")
+        self.sheet_cmp.CH.bind("<Button-1>", self._on_cmp_header_click, add="+")
         # 깔끔한 스타일: 행 번호 숨김, 적절한 행/머리글 높이
         try:
             self.sheet_cmp.hide("row_index")
@@ -1487,15 +1497,22 @@ class App(tk.Tk):
                                        default_header_height="1")
         except Exception:  # noqa: BLE001
             pass
+        # 선택 박스(점선 테두리) 색상을 그레이로 (기본 검정 → 회색)
+        try:
+            self.sheet_cmp.set_options(
+                table_selected_box_cells_fg="#9ca3af",
+                table_selected_box_rows_fg="#9ca3af",
+                table_selected_box_columns_fg="#9ca3af")
+        except Exception:  # noqa: BLE001
+            pass
 
-    def _on_cmp_sheet_double(self, event=None) -> None:
-        """원가비교 시트 더블클릭: 모델명 셀이면 재고현황 탭으로 이동·조회."""
-        r = getattr(event, "row", None)
-        c = getattr(event, "column", None)
-        if r is None or c is None:
-            sel = self.sheet_cmp.get_currently_selected()
-            if sel:
-                r, c = getattr(sel, "row", None), getattr(sel, "column", None)
+    def _on_cmp_cell_double(self, event=None) -> None:
+        """원가비교 시트 셀 더블클릭: 모델명 셀이면 재고현황 탭으로 이동·조회."""
+        try:
+            r = self.sheet_cmp.identify_row(event)
+            c = self.sheet_cmp.identify_column(event)
+        except Exception:  # noqa: BLE001
+            return
         if r is None or c is None:
             return
         headers = self._cmp_headers
@@ -1506,6 +1523,24 @@ class App(tk.Tk):
                 model = ""
             if model:
                 self._goto_inventory_for_model(model)
+
+    def _on_cmp_header_click(self, event=None) -> None:
+        """머리글 클릭: 해당 열 오름차순, 같은 열 다시 클릭하면 내림차순."""
+        try:
+            c = self.sheet_cmp.identify_column(event)
+        except Exception:  # noqa: BLE001
+            return
+        headers = self._cmp_headers
+        if c is None or not (0 <= c < len(headers)):
+            return
+        col = headers[c]
+        if self._cmp_sort_col == col:
+            self._cmp_sort_desc = not self._cmp_sort_desc
+        else:
+            self._cmp_sort_col = col
+            self._cmp_sort_desc = False
+        if getattr(self, "_compare_rows_all", []):
+            self._render_compare()
 
     def _fill_compare_sheet(self, rows: list[dict]) -> None:
         """원가비교 시트를 채우고 행 색상·열정렬·열폭을 적용한다."""
@@ -1521,7 +1556,11 @@ class App(tk.Tk):
         data = [[r.get(h, "") for h in headers] for r in rows]
 
         sh = self.sheet_cmp
-        sh.headers(headers)
+        # 정렬 중인 열에는 ▲/▼ 표시(표시용 머리글 — 식별용 _cmp_headers 는 원래 이름 유지)
+        sc = getattr(self, "_cmp_sort_col", None)
+        arrow = " ▼" if getattr(self, "_cmp_sort_desc", False) else " ▲"
+        disp_headers = [(h + arrow) if h == sc else h for h in headers]
+        sh.headers(disp_headers)
         sh.set_sheet_data(data, reset_col_positions=True, reset_row_positions=True, redraw=False)
         try:   # 모든 행 높이를 동일하게(세로 가운데 정렬 효과)
             sh.set_all_row_heights(getattr(self, "_cmp_row_h", 24), redraw=False)
@@ -1857,6 +1896,13 @@ class App(tk.Tk):
         self.chip_nostock.set_value(f"{n_nostock:,}")
         self.chip_unmatch.set_value(f"{n_unmatch:,}")
         self.chip_same.set_value(f"{n_same:,}")
+        # 전체 대비 비율(%) — 분류 칩에 표시
+        def _pct(n):
+            return f"{round(n * 100 / total)}%" if total else "0%"
+        self.chip_diff.set_pct(_pct(n_diff))
+        self.chip_nostock.set_pct(_pct(n_nostock))
+        self.chip_unmatch.set_pct(_pct(n_unmatch))
+        self.chip_same.set_pct(_pct(n_same))
         # 선택된 분류 칩 강조
         self.chip_total.set_active(self._cmp_cat is None)
         self.chip_diff.set_active(self._cmp_cat == "diff")
@@ -1864,9 +1910,19 @@ class App(tk.Tk):
         self.chip_unmatch.set_active(self._cmp_cat == "unmatched")
         self.chip_same.set_active(self._cmp_cat == "same")
 
-        # 대시보드 분류 필터 적용 → 표 표시
+        # 대시보드 분류 필터 적용
         rows = ([r for r in rows_bm if r.get("_tag") == self._cmp_cat]
-                if self._cmp_cat else rows_bm)
+                if self._cmp_cat else list(rows_bm))
+
+        # 정렬: 머리글 클릭 시 해당 열 / 기본은 브랜드 → 모델명 오름차순
+        sc = getattr(self, "_cmp_sort_col", None)
+        if sc:
+            rows.sort(key=lambda r: _sort_key(r.get(sc, "")),
+                      reverse=getattr(self, "_cmp_sort_desc", False))
+        else:
+            rows.sort(key=lambda r: (str(r.get("브랜드", "")).upper(),
+                                     str(r.get("모델명", "")).upper()))
+
         self._compare_rows = rows
         self._fill_compare_sheet(rows)
 
@@ -1894,6 +1950,8 @@ class App(tk.Tk):
         self.var_cmp_brand.set("")
         self.var_cmp_model.set("")
         self._cmp_cat = None
+        self._cmp_sort_col = None      # 기본 정렬(브랜드→모델명 오름차순)로 복귀
+        self._cmp_sort_desc = False
         if getattr(self, "_compare_rows_all", []):
             self._render_compare()
 
