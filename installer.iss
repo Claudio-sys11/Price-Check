@@ -8,7 +8,7 @@
 #define MyAppId "8F3C2A91-7B4D-4E26-9A1F-EC0A17E5C001"
 #define MyAppName "실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교"
 #define MyShortcutName "Price Check"
-#define MyAppVersion "1.0.51"
+#define MyAppVersion "1.0.52"
 #define MyAppPublisher "THE FEEL KOREA CO.,LTD."
 #define MyAppExeName "EcountInventory.exe"
 
@@ -53,15 +53,16 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "dist\EcountInventory.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "assets\app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "wizfasta_extract.js"; DestDir: "{app}"; Flags: ignoreversion
 Source: "update.example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "data\wizfasta_products.json"; DestDir: "{app}\data"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyShortcutName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyShortcutName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"
 Name: "{group}\{cm:UninstallProgram,{#MyShortcutName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyShortcutName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyShortcutName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"; Tasks: desktopicon
 
 [Run]
 ; 일반(대화형) 설치: 마침 페이지의 체크박스로 실행
