@@ -1475,17 +1475,18 @@ class App(tk.Tk):
             self.sheet_cmp.hide("row_index")
         except Exception:  # noqa: BLE001
             pass
+        # 데이터가 셀 안에서 세로 가운데로 보이도록 행 높이를 '텍스트높이+여백'으로 맞춤
+        # (tksheet 는 텍스트를 셀 상단에 그리므로, 위/아래 여백이 같아지게 행 높이를 조정)
         try:
-            self.sheet_cmp.set_options(default_row_height=32, default_header_height="1")
+            th = int(self.sheet_cmp.MT.table_txt_height)
+        except Exception:  # noqa: BLE001
+            th = 17
+        self._cmp_row_h = max(24, th + 6)
+        try:
+            self.sheet_cmp.set_options(default_row_height=self._cmp_row_h,
+                                       default_header_height="1")
         except Exception:  # noqa: BLE001
             pass
-        # 데이터 셀을 수직(세로) 가운데 정렬
-        for kw in ("table_vertical_alignment", "default_table_vertical_alignment",
-                   "vertical_alignment"):
-            try:
-                self.sheet_cmp.set_options(**{kw: "center"})
-            except Exception:  # noqa: BLE001
-                pass
 
     def _on_cmp_sheet_double(self, event=None) -> None:
         """원가비교 시트 더블클릭: 모델명 셀이면 재고현황 탭으로 이동·조회."""
@@ -1522,6 +1523,10 @@ class App(tk.Tk):
         sh = self.sheet_cmp
         sh.headers(headers)
         sh.set_sheet_data(data, reset_col_positions=True, reset_row_positions=True, redraw=False)
+        try:   # 모든 행 높이를 동일하게(세로 가운데 정렬 효과)
+            sh.set_all_row_heights(getattr(self, "_cmp_row_h", 24), redraw=False)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             sh.dehighlight_all()
         except Exception:  # noqa: BLE001
