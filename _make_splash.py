@@ -48,7 +48,7 @@ img.paste(wz, (x, cy - wz_h // 2), wz)
 d.line([(W // 2 - 160, 172), (W // 2 + 160, 172)], fill=HAIRLINE, width=1)
 ctext(186, f"VERSION {version.APP_VERSION}", font(10, True), GOLD)
 ctext(206, "T H E   F E E L   K O R E A   C O . , L T D .", font(9), MUTED)
-ctext(222, "Made by Claudio Lim", font(9), (194, 201, 198))
+ctext(222, "Created by Claudio Lim", font(9), (194, 201, 198))
 ctext(254, "로딩 중…", font(11), (91, 107, 103))
 
 img.save("splash.png")

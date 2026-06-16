@@ -606,7 +606,7 @@ class Splash(tk.Toplevel):
                       font=(FONT, 9, "bold"))
         c.create_text(w // 2, 207, text="T H E   F E E L   K O R E A   C O . , L T D .",
                       fill="#aab4b1", font=(FONT, 8))
-        c.create_text(w // 2, 223, text="Made by Claudio Lim",
+        c.create_text(w // 2, 223, text="Created by Claudio Lim",
                       fill="#c2c9c6", font=(FONT, 8))
 
         # 상태 + 스피너(단일 텍스트, 가운데)
