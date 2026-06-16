@@ -41,6 +41,52 @@ def resource_path(rel: str) -> str:
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, rel)
 
+
+# ===== 고해상도(DPI) 스케일링 =====
+# UI_SCALE = 화면 DPI / 96  (96dpi=100%→1.0, 144dpi=150%→1.5). 1920×1080·2560×1600 등
+# 서로 다른 배율에서도 동일한 비율·선명함으로 보이도록 커스텀 위젯/창 크기를 곱해 키운다.
+UI_SCALE = 1.0
+
+
+def enable_dpi_awareness():
+    """프로세스를 DPI 인식으로 만들어 고DPI에서 흐릿하지 않게 한다(Tk 생성 전 호출)."""
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)   # System DPI aware
+        except Exception:  # noqa: BLE001
+            ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def init_ui_scale(root):
+    """루트 창의 실제 DPI로 UI_SCALE 을 계산한다."""
+    global UI_SCALE
+    try:
+        dpi = float(root.winfo_fpixels("1i"))
+        UI_SCALE = max(1.0, min(3.0, dpi / 96.0))
+    except Exception:  # noqa: BLE001
+        UI_SCALE = 1.0
+    return UI_SCALE
+
+
+def sc(v):
+    """픽셀 값을 현재 UI 배율로 환산(정수)."""
+    return int(round(v * UI_SCALE))
+
+
+def _scale_photo(img):
+    """tk.PhotoImage 를 UI_SCALE 에 맞춰 정수 zoom/subsample 로 확대(고DPI 대응)."""
+    if img is None or abs(UI_SCALE - 1.0) < 0.01:
+        return img
+    try:
+        from fractions import Fraction
+        fr = Fraction(UI_SCALE).limit_denominator(8)
+        return img.zoom(fr.numerator).subsample(fr.denominator)
+    except Exception:  # noqa: BLE001
+        return img
+
 # ===== 디자인 팔레트 =====
 FONT = "맑은 고딕"   # Malgun Gothic — 한글에 최적화된 깔끔한 글자체
 BG = "#f3f4f6"          # 전체 배경(연한 회색)
@@ -257,6 +303,7 @@ class RoundedButton(tk.Canvas):
                  fill=ACCENT, fill_active=ACCENT_ACTIVE, fill_disabled="#a7ddd4",
                  fg="white", fg_disabled="#e6fffa",
                  font=(FONT, 10, "bold"), height=38, radius=19, padx=20, minwidth=0):
+        height, radius, padx, minwidth = sc(height), sc(radius), sc(padx), sc(minwidth)
         super().__init__(parent, bg=bg, highlightthickness=0, bd=0, height=height)
         self._command = command
         self._fill, self._fill_active, self._fill_disabled = fill, fill_active, fill_disabled
@@ -351,18 +398,19 @@ class RoundedTabBar(tk.Frame):
         left_count = 0
         for key, label, opts in tabs:
             side = opts.get("side", "left")
-            h = opts.get("height", 44)
+            h = sc(opts.get("height", 44))
             font = opts.get("font", (FONT, 11, "bold"))
-            padx = opts.get("padx", 28)
-            radius = opts.get("radius", 22)
+            padx = sc(opts.get("padx", 28))
+            radius = sc(opts.get("radius", 22))
             fnt = tkfont.Font(family=font[0], size=font[1],
                               weight=font[2] if len(font) > 2 else "normal")
             w = fnt.measure(label) + 2 * padx
             c = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, width=w, height=h)
+            gap = sc(8)
             if side == "right":
-                c.pack(side="right", padx=(8, 0))
+                c.pack(side="right", padx=(gap, 0))
             else:
-                c.pack(side="left", padx=(0 if left_count == 0 else 8, 0))
+                c.pack(side="left", padx=(0 if left_count == 0 else gap, 0))
                 left_count += 1
             c.bind("<Button-1>", lambda e, k=key: self._select(k))
             c.bind("<Enter>", lambda e, k=key: self._hover(k, True))
@@ -423,6 +471,7 @@ class StatChip(tk.Canvas):
 
     def __init__(self, parent, label, *, bg=BG, fill="#e0f7f1", fg="#0f766e",
                  cw=148, ch=60, radius=20, command=None):
+        cw, ch, radius = sc(cw), sc(ch), sc(radius)
         super().__init__(parent, bg=bg, highlightthickness=0, bd=0, width=cw, height=ch)
         self._label = label
         self._fill, self._fg = fill, fg
@@ -457,11 +506,11 @@ class StatChip(tk.Canvas):
                             fill=self._fill, outline="", smooth=True)
         if self._active:   # 선택 표시(골드 테두리)
             self.create_polygon(_round_rect_points(2, 2, self._cw - 2, self._ch - 2, self._radius),
-                                fill="", outline=GOLD, width=3, smooth=True)
-        self.create_text(self._cw // 2, self._ch // 2 - 9, text=self._value,
+                                fill="", outline=GOLD, width=max(2, sc(3)), smooth=True)
+        self.create_text(self._cw // 2, self._ch // 2 - sc(9), text=self._value,
                          fill=self._fg, font=(FONT, 18, "bold"))
         label = self._label + (f"  {self._pct}" if self._pct else "")
-        self.create_text(self._cw // 2, self._ch // 2 + 15, text=label,
+        self.create_text(self._cw // 2, self._ch // 2 + sc(15), text=label,
                          fill=self._fg, font=(FONT, 9, "bold"))
 
 
@@ -550,7 +599,7 @@ class Splash(tk.Toplevel):
     def __init__(self, parent, status: str = "로딩 중…"):
         super().__init__(parent)
         self.overrideredirect(True)
-        self._cw, self._ch = 560, 340
+        self._cw, self._ch = sc(560), sc(340)
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{self._cw}x{self._ch}+{(sw - self._cw) // 2}+{(sh - self._ch) // 2}")
         try:
@@ -574,23 +623,23 @@ class Splash(tk.Toplevel):
         self._img_ec = None
         self._img_wz = None
         try:
-            self._img_ec = tk.PhotoImage(file=resource_path("assets/ecount_logo_splash.png"))
-            self._img_wz = tk.PhotoImage(file=resource_path("assets/wizfasta_logo_splash.png"))
+            self._img_ec = _scale_photo(tk.PhotoImage(file=resource_path("assets/ecount_logo_splash.png")))
+            self._img_wz = _scale_photo(tk.PhotoImage(file=resource_path("assets/wizfasta_logo_splash.png")))
         except tk.TclError:
             self._img_ec = self._img_wz = None
 
         # 카드(둥근 흰색) + 얇은 보더 + 상단 골드 악센트
-        m, rad = 8, 32
+        m, rad = sc(8), sc(32)
         c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
                          fill="white", outline="", smooth=True)
-        c.create_polygon(_round_rect_points(w // 2 - 28, m + 16, w // 2 + 28, m + 21, 2),
+        c.create_polygon(_round_rect_points(w // 2 - sc(28), m + sc(16), w // 2 + sc(28), m + sc(21), sc(2)),
                          fill=GOLD, outline="", smooth=True)
 
         # 로고 행
-        cy = 124
+        cy = sc(124)
         if self._img_ec is not None and self._img_wz is not None:
             ew, wzw = self._img_ec.width(), self._img_wz.width()
-            gap, xw = 24, 18
+            gap, xw = sc(24), sc(18)
             total = ew + gap + xw + gap + wzw
             x = (w - total) // 2
             c.create_image(x + ew // 2, cy, image=self._img_ec)
@@ -601,26 +650,26 @@ class Splash(tk.Toplevel):
                           fill=ACCENT_ACTIVE, font=(FONT, 18, "bold"))
 
         # 구분선 + 버전 · 게시자
-        c.create_line(w // 2 - 160, 166, w // 2 + 160, 166, fill=HAIRLINE)
-        c.create_text(w // 2, 188, text=f"VERSION {APP_VERSION}", fill=GOLD,
+        c.create_line(w // 2 - sc(160), sc(166), w // 2 + sc(160), sc(166), fill=HAIRLINE)
+        c.create_text(w // 2, sc(188), text=f"VERSION {APP_VERSION}", fill=GOLD,
                       font=(FONT, 9, "bold"))
-        c.create_text(w // 2, 207, text="T H E   F E E L   K O R E A   C O . , L T D .",
+        c.create_text(w // 2, sc(207), text="T H E   F E E L   K O R E A   C O . , L T D .",
                       fill="#aab4b1", font=(FONT, 8))
-        c.create_text(w // 2, 223, text="Created by Claudio Lim",
+        c.create_text(w // 2, sc(223), text="Created by Claudio Lim",
                       fill="#c2c9c6", font=(FONT, 8))
 
         # 상태 + 스피너(단일 텍스트, 가운데)
         self._status_text = status
-        self._status_id = c.create_text(w // 2, 254, text=f"{SPINNER[0]}   {status}",
+        self._status_id = c.create_text(w // 2, sc(254), text=f"{SPINNER[0]}   {status}",
                                         fill="#5b6b67", font=(FONT, 10))
 
         # 진행률 바(다운로드/설치 시 생성)
         self._pct = 0.0
         self._bar_made = False
         self._pct_id = None
-        self._bw, self._bh = 340, 10
+        self._bw, self._bh = sc(340), sc(10)
         self._bx = (w - self._bw) // 2
-        self._by = 284
+        self._by = sc(284)
 
         self._anim_on = True
         self._i = 0
@@ -649,7 +698,7 @@ class Splash(tk.Toplevel):
                                        self._by + self._bh, self._bh // 2),
                     fill="#edf1f0", outline="", smooth=True, tags=("bartrack",))
                 self._pct_id = c.create_text(
-                    self._bx + self._bw + 28, self._by + self._bh // 2,
+                    self._bx + self._bw + sc(28), self._by + self._bh // 2,
                     text="0%", fill=ACCENT_ACTIVE, font=(FONT, 9, "bold"))
                 self._bar_made = True
             c.delete("barfill")
@@ -702,8 +751,8 @@ class PremiumDialog(tk.Toplevel):
             "ask": (ACCENT, ACCENT_ACTIVE),
         }
         accent, accent_dk = pal.get(kind, pal["info"])
-        w = 440
-        wrap = w - 64
+        w = sc(440)
+        wrap = w - sc(64)
         bg = "white"
         try:
             self.attributes("-topmost", True)
@@ -713,14 +762,14 @@ class PremiumDialog(tk.Toplevel):
         except tk.TclError:
             self.configure(bg="white")
 
-        c = tk.Canvas(self, width=w, height=600, bg=bg, highlightthickness=0, bd=0)
+        c = tk.Canvas(self, width=w, height=sc(600), bg=bg, highlightthickness=0, bd=0)
         c.pack(fill="both", expand=True)
 
         # 메시지 텍스트(먼저 그려 높이 측정)
-        mid = c.create_text(32, 84, anchor="nw", text=str(message), fill="#374151",
+        mid = c.create_text(sc(32), sc(84), anchor="nw", text=str(message), fill="#374151",
                             font=(FONT, 10), width=wrap)
         bb = c.bbox(mid)
-        h = max(150, (bb[3] if bb else 110) + 74)
+        h = max(sc(150), (bb[3] if bb else sc(110)) + sc(74))
 
         try:
             parent.update_idletasks()
@@ -734,20 +783,20 @@ class PremiumDialog(tk.Toplevel):
         c.config(height=h)
 
         # 카드(텍스트 뒤로) + 상단 악센트 + 제목 + 구분선
-        m, rad = 6, 26
+        m, rad = sc(6), sc(26)
         card = c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
                                 fill="white", outline="", smooth=True)
-        acc = c.create_polygon(_round_rect_points(m, m, w - m, m + 6, 3),
+        acc = c.create_polygon(_round_rect_points(m, m, w - m, m + sc(6), sc(3)),
                                fill=accent, outline="", smooth=True)
         c.tag_lower(card, mid)
         c.tag_lower(acc, mid)
-        c.create_text(32, 44, anchor="w", text=str(title), fill=INK, font=(FONT, 13, "bold"))
-        c.create_oval(w - 46, 38, w - 34, 50, fill=accent, outline="")
-        c.create_line(28, 64, w - 28, 64, fill=HAIRLINE)
+        c.create_text(sc(32), sc(44), anchor="w", text=str(title), fill=INK, font=(FONT, 13, "bold"))
+        c.create_oval(w - sc(46), sc(38), w - sc(34), sc(50), fill=accent, outline="")
+        c.create_line(sc(28), sc(64), w - sc(28), sc(64), fill=HAIRLINE)
 
         # 버튼
         bar = tk.Frame(self, bg="white")
-        bar.place(x=w - 28, y=h - 30, anchor="e")
+        bar.place(x=w - sc(28), y=h - sc(30), anchor="e")
 
         def mk(text, cmd, fill, fdk, fg="white"):
             return RoundedButton(bar, text, cmd, bg="white", fill=fill, fill_active=fdk,
@@ -849,12 +898,12 @@ class PremiumMenu(tk.Toplevel):
         super().__init__(parent)
         self.overrideredirect(True)
         self._items = items
-        self._row_h, self._sep_h, self._pad = 32, 9, 6
+        self._row_h, self._sep_h, self._pad = sc(32), sc(9), sc(6)
         self._hover = -1
 
         fnt = tkfont.Font(family=FONT, size=10)
         labels = [t for t, _ in items if t != "-"]
-        self._mw = (max((fnt.measure(t) for t in labels), default=120)) + 56
+        self._mw = (max((fnt.measure(t) for t in labels), default=sc(120))) + sc(56)
         h = self._pad * 2
         for t, _cmd in items:
             h += self._sep_h if t == "-" else self._row_h
@@ -902,22 +951,23 @@ class PremiumMenu(tk.Toplevel):
     def _build(self):
         c = self.c
         c.delete("all")
-        c.create_polygon(_round_rect_points(2, 2, self._mw - 2, self._mh - 2, 14),
+        c.create_polygon(_round_rect_points(2, 2, self._mw - 2, self._mh - 2, sc(14)),
                          fill="white", outline="", smooth=True)
         y = self._pad
         for i, (t, _cmd) in enumerate(self._items):
             if t == "-":
-                c.create_line(16, y + self._sep_h // 2, self._mw - 16, y + self._sep_h // 2,
-                              fill=HAIRLINE)
+                c.create_line(sc(16), y + self._sep_h // 2, self._mw - sc(16),
+                              y + self._sep_h // 2, fill=HAIRLINE)
                 y += self._sep_h
             else:
                 fg = TEXT
                 if i == self._hover:
                     c.create_polygon(
-                        _round_rect_points(6, y + 2, self._mw - 6, y + self._row_h - 2, 9),
+                        _round_rect_points(sc(6), y + sc(2), self._mw - sc(6),
+                                           y + self._row_h - sc(2), sc(9)),
                         fill="#eaf7f4", outline="", smooth=True)
                     fg = ACCENT_ACTIVE
-                c.create_text(20, y + self._row_h // 2, anchor="w", text=t,
+                c.create_text(sc(20), y + self._row_h // 2, anchor="w", text=t,
                               fill=fg, font=(FONT, 10))
                 y += self._row_h
 
@@ -946,9 +996,10 @@ class PremiumMenu(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
+        init_ui_scale(self)   # 화면 DPI 로 UI 배율 계산(이후 sc()/위젯 크기에 반영)
         self.title(f"실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교  v{APP_VERSION}")
-        self.geometry("1120x720")
-        self.minsize(940, 600)
+        self.geometry(f"{sc(1120)}x{sc(720)}")
+        self.minsize(sc(940), sc(600))
         self.configure(bg=BG)
 
         # 로딩 화면(스플래시) — 메인은 준비될 때까지 숨김
@@ -1090,28 +1141,28 @@ class App(tk.Tk):
                         bordercolor=BG, arrowcolor=MUTED, relief="flat")
 
     def _build_header(self) -> None:
-        self._header_h = 66
+        self._header_h = sc(66)
         self._header = tk.Canvas(self, height=self._header_h, highlightthickness=0, bd=0)
         self._header.pack(fill="x")
         self._header.bind("<Configure>", self._draw_header)
 
     def _draw_header(self, event=None) -> None:
         c = self._header
-        w = (event.width if event else c.winfo_width()) or 1120
+        w = (event.width if event else c.winfo_width()) or sc(1120)
         h = self._header_h
         c.delete("all")
         # 딥 틸 → 민트 그라데이션 + 하단 골드 헤어라인
         _paint_h_gradient(c, w, h, HEADER_DARK, ACCENT)
-        c.create_rectangle(0, h - 3, w, h, fill=GOLD, outline="")
+        c.create_rectangle(0, h - sc(3), w, h, fill=GOLD, outline="")
         # 좌측 골드 악센트 바
-        c.create_rectangle(20, h // 2 - 11, 24, h // 2 + 11, fill=GOLD, outline="")
+        c.create_rectangle(sc(20), h // 2 - sc(11), sc(24), h // 2 + sc(11), fill=GOLD, outline="")
         title = "실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교"
-        c.create_text(38, h // 2, anchor="w", text=title, fill="white",
+        c.create_text(sc(38), h // 2, anchor="w", text=title, fill="white",
                       font=(FONT, 15, "bold"))
         tw = tkfont.Font(family=FONT, size=15, weight="bold").measure(title)
-        c.create_text(38 + tw + 14, h // 2 + 1, anchor="w", text=f"v{APP_VERSION}",
+        c.create_text(sc(38) + tw + sc(14), h // 2 + 1, anchor="w", text=f"v{APP_VERSION}",
                       fill=GOLD_SOFT, font=(FONT, 10))
-        c.create_text(w - 20, h // 2, anchor="e",
+        c.create_text(w - sc(20), h // 2, anchor="e",
                       text="설정 ▸ 인증 정보에서 API 키를 입력하세요",
                       fill=ACCENT_SOFT, font=(FONT, 9))
 
@@ -1493,7 +1544,7 @@ class App(tk.Tk):
             th = int(self.sheet_cmp.MT.table_txt_height)
         except Exception:  # noqa: BLE001
             th = 17
-        self._cmp_row_h = max(24, th + 6)
+        self._cmp_row_h = max(sc(24), th + sc(6))
         try:
             self.sheet_cmp.set_options(default_row_height=self._cmp_row_h,
                                        default_header_height="1")
@@ -1599,7 +1650,7 @@ class App(tk.Tk):
             w = fnt_b.measure(str(h))
             for r in rows:
                 w = max(w, fnt.measure(str(r.get(h, ""))))
-            w = min(max(w + 30, 64), 460)   # 여백 + 최소/최대 제한
+            w = min(max(w + sc(30), sc(64)), sc(460))   # 여백 + 최소/최대 제한
             try:
                 sh.column_width(column=ci, width=w, redraw=False)
             except Exception:  # noqa: BLE001
@@ -2376,6 +2427,7 @@ def run_install_window(url: str, ver: str, target: str) -> None:
     """
     import subprocess
     root = tk.Tk()
+    init_ui_scale(root)
     root.withdraw()
     sp = Splash(root, status="업데이트 준비 중…")
     st = {"installer": None, "installed": False, "failed": False}
@@ -2458,6 +2510,7 @@ def spawn_install_updater(url: str, ver: str, target: str) -> bool:
 
 
 def main() -> None:
+    enable_dpi_awareness()   # 고DPI에서 흐릿함 방지(Tk 생성 전)
     if len(sys.argv) >= 2 and sys.argv[1] == "--install":
         url = sys.argv[2] if len(sys.argv) > 2 else ""
         ver = sys.argv[3] if len(sys.argv) > 3 else ""
