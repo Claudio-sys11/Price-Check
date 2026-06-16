@@ -1478,13 +1478,13 @@ class App(tk.Tk):
         cw = 122
         self.chip_total = StatChip(chip_box, "전체 (Wiz)", fill="#e0f7f1", fg="#0f766e",
                                    cw=cw, command=lambda: self._set_cmp_category(None))
-        self.chip_diff = StatChip(chip_box, "단가차이", fill=DIFF_BG, fg=DIFF_FG,
+        self.chip_diff = StatChip(chip_box, "원가차이", fill=DIFF_BG, fg=DIFF_FG,
                                   cw=cw, command=lambda: self._set_cmp_category("diff"))
         self.chip_nostock = StatChip(chip_box, "미입고", fill="#fdeccb", fg="#8a5a0a",
                                      cw=cw, command=lambda: self._set_cmp_category("nostock"))
         self.chip_unmatch = StatChip(chip_box, "미매칭", fill=UNMATCH_BG, fg="#4b5563",
                                      cw=cw, command=lambda: self._set_cmp_category("unmatched"))
-        self.chip_same = StatChip(chip_box, "단가일치", fill="#d7f5ed", fg="#0d9488",
+        self.chip_same = StatChip(chip_box, "원가일치", fill="#d7f5ed", fg="#0d9488",
                                   cw=cw, command=lambda: self._set_cmp_category("same"))
         for c in (self.chip_total, self.chip_diff, self.chip_nostock,
                   self.chip_unmatch, self.chip_same):
@@ -1980,8 +1980,8 @@ class App(tk.Tk):
         self._fill_compare_sheet(rows)
 
         full = len(allrows)
-        catname = {"diff": "단가차이", "nostock": "미입고",
-                   "unmatched": "미매칭", "same": "단가일치"}.get(self._cmp_cat)
+        catname = {"diff": "원가차이", "nostock": "미입고",
+                   "unmatched": "미매칭", "same": "원가일치"}.get(self._cmp_cat)
         if catname:
             self.cmp_status.set(f"[{catname}] {len(rows):,}건 / 전체 {full:,}건")
         elif total == full:
