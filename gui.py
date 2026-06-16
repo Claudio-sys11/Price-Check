@@ -1366,24 +1366,29 @@ class App(tk.Tk):
         self.var_base_date = tk.StringVar()
         self.var_prod = tk.StringVar()
         self.var_wh = tk.StringVar()
-        ttk.Label(cond, text="기준일자(YYYYMMDD)").grid(row=0, column=0, sticky="e", **pad)
-        ttk.Entry(cond, textvariable=self.var_base_date, width=16).grid(row=0, column=1, sticky="w", **pad)
-        ttk.Label(cond, text="브랜드").grid(row=0, column=2, sticky="e", **pad)
-        ent_brand = ttk.Entry(cond, textvariable=self.var_brand, width=18)
-        ent_brand.grid(row=0, column=3, sticky="w", **pad)
-        ttk.Label(cond, text="모델명").grid(row=0, column=4, sticky="e", **pad)
-        ent_model = ttk.Entry(cond, textvariable=self.var_model, width=18)
-        ent_model.grid(row=0, column=5, sticky="w", **pad)
+        # 조회 조건 — 한 줄 가로 배열
+        cpad = {"padx": (8, 3), "pady": 6}
+        epad = {"padx": (0, 10), "pady": 6}
+        ttk.Label(cond, text="기준일자").grid(row=0, column=0, sticky="e", **cpad)
+        ttk.Entry(cond, textvariable=self.var_base_date, width=12).grid(row=0, column=1, sticky="w", **epad)
+        ttk.Label(cond, text="브랜드").grid(row=0, column=2, sticky="e", **cpad)
+        ent_brand = ttk.Entry(cond, textvariable=self.var_brand, width=14)
+        ent_brand.grid(row=0, column=3, sticky="w", **epad)
+        ttk.Label(cond, text="모델명").grid(row=0, column=4, sticky="e", **cpad)
+        ent_model = ttk.Entry(cond, textvariable=self.var_model, width=14)
+        ent_model.grid(row=0, column=5, sticky="w", **epad)
+        ttk.Label(cond, text="품목코드").grid(row=0, column=6, sticky="e", **cpad)
+        ttk.Entry(cond, textvariable=self.var_prod, width=12).grid(row=0, column=7, sticky="w", **epad)
+        ttk.Label(cond, text="창고코드").grid(row=0, column=8, sticky="e", **cpad)
+        ttk.Entry(cond, textvariable=self.var_wh, width=12).grid(row=0, column=9, sticky="w", **epad)
         # 조회 후 브랜드/모델명을 바꾸면 재조회 없이 즉시 재필터
         ent_brand.bind("<KeyRelease>", self._on_filter_change)
         ent_model.bind("<KeyRelease>", self._on_filter_change)
-        ttk.Label(cond, text="품목코드").grid(row=1, column=0, sticky="e", **pad)
-        ttk.Entry(cond, textvariable=self.var_prod, width=16).grid(row=1, column=1, sticky="w", **pad)
-        ttk.Label(cond, text="창고코드").grid(row=1, column=2, sticky="e", **pad)
-        ttk.Entry(cond, textvariable=self.var_wh, width=18).grid(row=1, column=3, sticky="w", **pad)
+        self.btn_reset = gray_button(cond, "↺ 조건 초기화", self._on_reset_conditions)
+        self.btn_reset.grid(row=0, column=10, sticky="w", padx=(6, 8), pady=6)
         ttk.Label(cond, style="Muted.TLabel",
-                  text="※ 브랜드·모델명은 조회 결과를 부분일치로 필터링합니다. 결과는 브랜드 순으로 정렬됩니다.").grid(
-                      row=2, column=0, columnspan=6, sticky="w", padx=8, pady=(2, 0))
+                  text="※ 기준일자는 YYYYMMDD. 브랜드·모델명은 조회 결과를 부분일치로 필터링합니다. 결과는 브랜드 순으로 정렬됩니다.").grid(
+                      row=1, column=0, columnspan=11, sticky="w", padx=8, pady=(2, 0))
 
         btns = ttk.Frame(root)
         btns.pack(fill="x", padx=16, pady=(2, 6))
@@ -2383,6 +2388,18 @@ class App(tk.Tk):
         """조회조건(브랜드/모델명) 변경 시: 이미 받아온 데이터에서 즉시 재필터(재조회 없음)."""
         if getattr(self, "_inventory_display_all", []):
             self._render_inventory()
+
+    def _on_reset_conditions(self) -> None:
+        """조회 조건(기준일자·브랜드·모델명·품목코드·창고코드)을 모두 비우고 즉시 재필터."""
+        for var in (self.var_base_date, self.var_brand, self.var_model,
+                    self.var_prod, self.var_wh):
+            var.set("")
+        if getattr(self, "_inventory_display_all", []):
+            self._render_inventory()
+        try:
+            self.status.set("조회 조건을 초기화했습니다.")
+        except Exception:
+            pass
 
     def _on_sort_column(self, col: str) -> None:
         """열 머리글 클릭: 같은 열이면 오름↔내림 토글, 다른 열이면 그 열 오름차순."""
