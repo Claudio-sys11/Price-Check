@@ -8,7 +8,7 @@
 #define MyAppId "8F3C2A91-7B4D-4E26-9A1F-EC0A17E5C001"
 #define MyAppName "실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교"
 #define MyShortcutName "Price Check"
-#define MyAppVersion "1.0.50"
+#define MyAppVersion "1.0.51"
 #define MyAppPublisher "THE FEEL KOREA CO.,LTD."
 #define MyAppExeName "EcountInventory.exe"
 
@@ -36,6 +36,9 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+; 설치 마법사 / 제어판 표시 아이콘
+SetupIconFile=assets\app_icon.ico
+UninstallDisplayIcon={app}\{#MyAppExeName}
 ; 같은 버전 재설치 시에도 깔끔하게 덮어쓰도록
 UninstallDisplayName={#MyAppName}
 ; 설치 대상 exe 가 실행 중이면 Restart Manager 로 자동 종료(잠금 해제)
