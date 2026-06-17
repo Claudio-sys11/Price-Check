@@ -194,6 +194,26 @@ def save_daily_status(records: list) -> None:
         pass
 
 
+LOGIN_PATH = os.path.join(app_data_dir(), "login.json")   # 로그인 기억(로컬 전용)
+
+
+def load_saved_login() -> dict:
+    try:
+        with open(LOGIN_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+            return d if isinstance(d, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_saved_login(data: dict) -> None:
+    try:
+        with open(LOGIN_PATH, "w", encoding="utf-8") as f:
+            json.dump(data or {}, f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
 def _sort_key(value) -> tuple:
     """정렬 키: 숫자로 해석되면 숫자 기준, 아니면 문자 기준(콤마 제거)."""
     s = str(value).replace(",", "").strip()
@@ -1337,7 +1357,7 @@ class App(tk.Tk):
         dlg = tk.Toplevel(self)
         dlg.overrideredirect(True)
         dlg.protocol("WM_DELETE_WINDOW", self.destroy)   # 로그인 안 하면 종료
-        w, h = sc(366), sc(524)
+        w, h = sc(366), sc(556)
         sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
         gx, gy = (sw - w) // 2, (sh - h) // 3
         dlg.geometry(f"{w}x{h}+{max(0, gx)}+{max(0, gy)}")
@@ -1413,20 +1433,44 @@ class App(tk.Tk):
         e_pw = ttk.Entry(form, textvariable=v_pw, show="*")
         e_pw.grid(row=3, column=0, sticky="ew", ipady=sc(5))
 
+        # 아이디 기억 / 비밀번호 기억 (각각 분리)
+        v_remember_id = tk.BooleanVar(value=False)
+        v_remember_pw = tk.BooleanVar(value=False)
+        chkrow = tk.Frame(form, bg="white")
+        chkrow.grid(row=4, column=0, sticky="w", pady=(8, 0))
+
+        def _mk_chk(text, var):
+            return tk.Checkbutton(chkrow, text=text, variable=var, bg="white",
+                                  fg="#6b7280", activebackground="white",
+                                  activeforeground="#6b7280", selectcolor="white",
+                                  highlightthickness=0, bd=0, cursor="hand2",
+                                  font=(FONT, 9))
+        _mk_chk("아이디 기억", v_remember_id).pack(side="left")
+        _mk_chk("비밀번호 기억", v_remember_pw).pack(side="left", padx=(sc(12), 0))
+
         v_status = tk.StringVar(value="")
         tk.Label(form, textvariable=v_status, bg="white", fg="#dc2626",
                  font=(FONT, 9), wraplength=w - sc(90), justify="left").grid(
-                     row=4, column=0, sticky="w", pady=(10, 2))
+                     row=5, column=0, sticky="w", pady=(8, 2))
 
         btn_login = RoundedButton(form, "로그인", lambda: do_login(), bg="white",
                                   fill=INDIGO, fill_active=INDIGO_DK,
                                   fill_disabled="#b3aad4", fg="white",
                                   fg_disabled="#e7e2f5", height=42, radius=21)
-        btn_login.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+        btn_login.grid(row=6, column=0, sticky="ew", pady=(8, 0))
         link = tk.Label(form, text="회원가입", bg="white", fg=INDIGO,
                         font=(FONT, 9, "underline"), cursor="hand2")
-        link.grid(row=6, column=0, pady=(12, 0))
+        link.grid(row=7, column=0, pady=(10, 0))
         link.bind("<Button-1>", lambda e: self._show_register(dlg))
+
+        # 저장된 로그인 불러와 채우기(아이디/비밀번호 각각)
+        _saved = load_saved_login()
+        if _saved.get("remember_id"):
+            v_user.set(_saved.get("username", ""))
+            v_remember_id.set(True)
+        if _saved.get("remember_pw"):
+            v_pw.set(_saved.get("password", ""))
+            v_remember_pw.set(True)
 
         def set_busy(b):
             v_status.set("로그인 중…" if b else v_status.get())
@@ -1456,6 +1500,13 @@ class App(tk.Tk):
 
         def ok(auth):
             self._auth = auth
+            _data = {"remember_id": v_remember_id.get(),
+                     "remember_pw": v_remember_pw.get()}
+            if v_remember_id.get():
+                _data["username"] = v_user.get().strip()
+            if v_remember_pw.get():
+                _data["password"] = v_pw.get()
+            save_saved_login(_data)
             try:
                 dlg.grab_release()
             except Exception:
@@ -2970,6 +3021,7 @@ class App(tk.Tk):
             "nostock": sum(1 for r in rows if r.get("_tag") == "nostock"),
             "unmatched": sum(1 for r in rows if r.get("_tag") == "unmatched"),
             "same": sum(1 for r in rows if r.get("_tag") == "same"),
+            "by": (self._auth or {}).get("username", ""),   # 조회자 ID
         }
         # 로컬 백업 저장(오프라인 대비)
         hist = [h for h in load_daily_status() if h.get("date") != rec["date"]]
@@ -3004,11 +3056,26 @@ class App(tk.Tk):
         self.btn_daily_csv.pack(side="left", padx=8)
         # 원가차이 추이 보기 전환(일별 / 월별)
         self._daily_chart_mode = "day"
+        self._daily_cache = []
         ttk.Label(btns, text="추이:", style="Muted.TLabel").pack(side="left", padx=(16, 4))
         self.btn_chart_day = gray_button(btns, "일별", lambda: self._set_chart_mode("day"))
         self.btn_chart_day.pack(side="left")
         self.btn_chart_month = gray_button(btns, "월별", lambda: self._set_chart_mode("month"))
         self.btn_chart_month.pack(side="left", padx=6)
+        # 년도(2026~3개년) / 월(전체·1~12월) 선택
+        self._daily_year, self._daily_month = 2026, 0
+        ttk.Label(btns, text="년도:", style="Muted.TLabel").pack(side="left", padx=(16, 4))
+        self.cmb_year = ttk.Combobox(btns, width=7, state="readonly",
+                                     values=["2026년", "2027년", "2028년"])
+        self.cmb_year.set("2026년")
+        self.cmb_year.pack(side="left")
+        self.cmb_year.bind("<<ComboboxSelected>>", self._on_daily_period_change)
+        ttk.Label(btns, text="월:", style="Muted.TLabel").pack(side="left", padx=(10, 4))
+        self.cmb_month = ttk.Combobox(btns, width=6, state="readonly",
+                                      values=["전체"] + [f"{i}월" for i in range(1, 13)])
+        self.cmb_month.set("전체")
+        self.cmb_month.pack(side="left")
+        self.cmb_month.bind("<<ComboboxSelected>>", self._on_daily_period_change)
         self.daily_status = tk.StringVar(value="")
         ttk.Label(btns, textvariable=self.daily_status, style="Status.TLabel").pack(side="right")
 
@@ -3022,16 +3089,16 @@ class App(tk.Tk):
 
         tf = tk.Frame(root, bg=BORDER)
         tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
-        cols = ("date", "time", "total", "diff", "nostock", "unmatched", "same")
+        cols = ("date", "time", "total", "diff", "nostock", "unmatched", "same", "by")
         heads = {"date": "일자", "time": "갱신시각", "total": "전체",
                  "diff": "원가차이", "nostock": "미입고",
-                 "unmatched": "미매칭", "same": "원가일치"}
+                 "unmatched": "미매칭", "same": "원가일치", "by": "조회자"}
         self.tree_daily = ttk.Treeview(tf, show="headings", columns=cols)
         for c in cols:
             self.tree_daily.heading(c, text=heads[c])
             self.tree_daily.column(
                 c, anchor="center",
-                width=(sc(130) if c == "date" else sc(108)), stretch=True)
+                width=(sc(120) if c in ("date", "by") else sc(100)), stretch=True)
         ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_daily.yview)
         self.tree_daily.configure(yscrollcommand=ysb.set)
         self.tree_daily.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
@@ -3062,21 +3129,59 @@ class App(tk.Tk):
         hist = list(hist or [])
         hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")), reverse=True)
         self._daily_cache = hist
+        self._refresh_daily_view()
+
+    @staticmethod
+    def _display_user(uid):
+        """THEFEELKOREA(관리자)는 '임정수'로 표기, 그 외는 아이디 그대로."""
+        return "임정수" if (uid or "").upper() == "THEFEELKOREA" else (uid or "")
+
+    def _daily_filter(self, records, apply_month=True):
+        """선택된 년도(+월) 기준으로 일일현황 레코드를 거른다."""
+        y = str(getattr(self, "_daily_year", 2026))
+        m = getattr(self, "_daily_month", 0)
+        out = []
+        for r in records:
+            d = str(r.get("date", ""))
+            if len(d) < 7 or d[:4] != y:
+                continue
+            if apply_month and m and d[5:7] != f"{m:02d}":
+                continue
+            out.append(r)
+        return out
+
+    def _on_daily_period_change(self, event=None) -> None:
+        try:
+            self._daily_year = int(self.cmb_year.get().replace("년", ""))
+        except (ValueError, AttributeError):
+            self._daily_year = 2026
+        mtxt = self.cmb_month.get()
+        self._daily_month = 0 if mtxt == "전체" else int(mtxt.replace("월", ""))
+        self._refresh_daily_view()
+
+    def _refresh_daily_view(self) -> None:
+        """년/월 필터를 적용해 표와 그래프를 갱신."""
+        if not hasattr(self, "tree_daily"):
+            return
+        view = self._daily_filter(self._daily_cache, apply_month=True)
+        view.sort(key=lambda h: (h.get("date", ""), h.get("time", "")), reverse=True)
         self.tree_daily.delete(*self.tree_daily.get_children())
 
         def cell(n, total):
             return f"{n:,} ({round(n * 100 / total)}%)" if total else f"{n:,}"
 
-        for h in hist:
+        for h in view:
             t = h.get("total", 0)
             self.tree_daily.insert("", "end", values=(
                 h.get("date", ""), h.get("time", ""), f"{t:,}",
                 cell(h.get("diff", 0), t), cell(h.get("nostock", 0), t),
-                cell(h.get("unmatched", 0), t), cell(h.get("same", 0), t)))
+                cell(h.get("unmatched", 0), t), cell(h.get("same", 0), t),
+                self._display_user(h.get("by", ""))))
         shared = " (공유)" if backend.backend_enabled() else ""
+        mtxt = "전체" if not self._daily_month else f"{self._daily_month}월"
         self.daily_status.set(
-            f"총 {len(hist)}일치 기록{shared}" if hist
-            else "기록 없음 — 원가비교를 실행하면 자동 저장됩니다.")
+            f"{self._daily_year}년 {mtxt} · {len(view)}건{shared}" if view
+            else f"{self._daily_year}년 {mtxt} — 기록 없음")
         self._draw_diff_chart()
 
     def _set_chart_mode(self, mode: str) -> None:
@@ -3097,23 +3202,27 @@ class App(tk.Tk):
         self._draw_diff_chart()
 
     def _daily_series(self) -> list:
-        """현재 모드에 맞춘 [{label, value, pct}] 시리즈(과거→현재)."""
-        cache = getattr(self, "_daily_cache", [])
+        """현재 모드(일별/월별)와 선택 년/월에 맞춘 [{label, value, pct}] 시리즈."""
         if getattr(self, "_daily_chart_mode", "day") == "month":
+            # 선택 년도의 12개월 추이(월평균) — 월 선택과 무관하게 연 단위
+            recs = self._daily_filter(self._daily_cache, apply_month=False)
             by: dict = {}
-            for h in cache:
+            for h in recs:
                 ym = str(h.get("date", ""))[:7]   # YYYY-MM
                 if ym:
                     by.setdefault(ym, []).append(h)
             series = []
-            for ym in sorted(by)[-12:]:
-                recs = by[ym]
-                ad = sum(int(r.get("diff", 0) or 0) for r in recs) / len(recs)
-                at = sum(int(r.get("total", 0) or 0) for r in recs) / len(recs)
-                series.append({"label": ym[2:], "value": round(ad),
-                               "pct": round(ad * 100 / at) if at else 0})   # YY-MM, 월평균
+            for ym in sorted(by):
+                rs = by[ym]
+                ad = sum(int(r.get("diff", 0) or 0) for r in rs) / len(rs)
+                at = sum(int(r.get("total", 0) or 0) for r in rs) / len(rs)
+                series.append({"label": ym[5:7] + "월", "value": round(ad),
+                               "pct": round(ad * 100 / at) if at else 0})   # 월평균
             return series
-        recs = sorted(cache, key=lambda h: (h.get("date", ""), h.get("time", "")))[-24:]
+        # 일별: 선택 년+월(월 전체면 그 해 최근 31일)
+        recs = self._daily_filter(self._daily_cache, apply_month=True)
+        recs.sort(key=lambda h: (h.get("date", ""), h.get("time", "")))
+        recs = recs[-31:]
         out = []
         for r in recs:
             v = int(r.get("diff", 0) or 0)
@@ -3169,19 +3278,19 @@ class App(tk.Tk):
             top = base_y - plot_h * v / maxv
             cv.create_rectangle(xc - bar_w / 2, top, xc + bar_w / 2, base_y,
                                 fill=BAR_PASTEL, outline="")
-            label = f"{v:,} ({pct}%)"           # 수치와 비율을 한 줄(좌우)로
+            label = f"{v:,}건 ({pct}%)"          # 건수 + '건' + 비율을 한 줄(좌우)로
             if fnt_lbl.measure(label) <= slot or v == maxv:
                 cv.create_text(xc, top - sc(8), text=label,
                                fill=LABEL_RED, font=(FONT, 8, "bold"))
             elif bar_w >= sc(12):
-                cv.create_text(xc, top - sc(8), text=f"{v:,}",
+                cv.create_text(xc, top - sc(8), text=f"{v:,}건",
                                fill=LABEL_RED, font=(FONT, 8, "bold"))
             if i % lbl_step == 0 or i == n - 1:
                 cv.create_text(xc, base_y + sc(11), text=s["label"],
                                fill=MUTED, font=(FONT, 8))
 
     def _export_daily(self) -> None:
-        hist = list(getattr(self, "_daily_cache", []))
+        hist = self._daily_filter(list(getattr(self, "_daily_cache", [])), apply_month=True)
         if not hist:
             pmsg.showwarning("데이터 없음", "내보낼 일일현황 기록이 없습니다.")
             return
@@ -3190,7 +3299,7 @@ class App(tk.Tk):
             "일자": h.get("date", ""), "갱신시각": h.get("time", ""),
             "전체": h.get("total", 0), "원가차이": h.get("diff", 0),
             "미입고": h.get("nostock", 0), "미매칭": h.get("unmatched", 0),
-            "원가일치": h.get("same", 0),
+            "원가일치": h.get("same", 0), "조회자": self._display_user(h.get("by", "")),
         } for h in hist]
         export_rows_excel(rows, "일일현황.xlsx")
 
