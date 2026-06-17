@@ -1357,14 +1357,14 @@ class App(tk.Tk):
         c.create_text(w // 2, sc(120), text="Price Check", fill=INDIGO,
                       font=self._script_font(26))
         c.create_text(w // 2, sc(148), text="원가비교 프로그램",
-                      fill="#6b7280", font=(FONT, 11))
+                      fill="#6b7280", font=self._cursive_font(9, "normal"))
         c.create_line(w // 2 - sc(28), sc(170), w // 2 + sc(28), sc(170),
                       fill=GOLD, width=1)
 
         # 하단 푸터(은은한 그레이)
-        c.create_text(w // 2, h - sc(36), text="THE FEEL KOREA CO.,LTD.",
-                      fill="#a3a8a6", font=(FONT, 8))
-        c.create_text(w // 2, h - sc(20), text="Created by Claudio Lim",
+        c.create_text(w // 2, h - sc(40), text="THE FEEL KOREA CO.,LTD.",
+                      fill="#a3a8a6", font=(FONT, 10))
+        c.create_text(w // 2, h - sc(22), text="Created by Claudio Lim",
                       fill="#bfc4c2", font=(FONT, 8))
 
         # 닫기(종료)
@@ -1508,9 +1508,9 @@ class App(tk.Tk):
         c.create_text(w // 2, sc(130), text="회원가입", fill="#6b7280", font=(FONT, 11))
         c.create_line(w // 2 - sc(28), sc(150), w // 2 + sc(28), sc(150),
                       fill=GOLD, width=1)
-        c.create_text(w // 2, h - sc(36), text="THE FEEL KOREA CO.,LTD.",
-                      fill="#a3a8a6", font=(FONT, 8))
-        c.create_text(w // 2, h - sc(20), text="Created by Claudio Lim",
+        c.create_text(w // 2, h - sc(40), text="THE FEEL KOREA CO.,LTD.",
+                      fill="#a3a8a6", font=(FONT, 10))
+        c.create_text(w // 2, h - sc(22), text="Created by Claudio Lim",
                       fill="#bfc4c2", font=(FONT, 8))
 
         def close_reg():
