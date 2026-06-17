@@ -1290,42 +1290,70 @@ class App(tk.Tk):
         win.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
 
     def _show_login(self) -> None:
+        KEY = "#FF00FE"   # 투명 처리 키 컬러(둥근 모서리)
         dlg = tk.Toplevel(self)
-        dlg.title("로그인 — 원가비교 프로그램")
-        dlg.configure(bg=BG)
-        dlg.resizable(False, False)
+        dlg.overrideredirect(True)
         dlg.protocol("WM_DELETE_WINDOW", self.destroy)   # 로그인 안 하면 종료
+        w, h = sc(382), sc(352)
+        sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+        gx, gy = (sw - w) // 2, (sh - h) // 3
+        dlg.geometry(f"{w}x{h}+{max(0, gx)}+{max(0, gy)}")
+        cbg = "white"
+        try:
+            dlg.attributes("-topmost", True)
+            dlg.attributes("-transparentcolor", KEY)
+            dlg.configure(bg=KEY)
+            cbg = KEY
+        except tk.TclError:
+            dlg.configure(bg="white")
 
-        head = tk.Frame(dlg, bg=ACCENT, height=sc(60))
-        head.pack(fill="x")
-        head.pack_propagate(False)
-        tk.Label(head, text="원가비교 프로그램", bg=ACCENT, fg="white",
-                 font=(FONT, 15, "bold")).pack(side="left", padx=sc(20))
+        c = tk.Canvas(dlg, width=w, height=h, bg=cbg, highlightthickness=0, bd=0)
+        c.pack(fill="both", expand=True)
+        m, rad = sc(6), sc(26)
+        c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
+                         fill="white", outline="", smooth=True)
+        c.create_polygon(_round_rect_points(m, m, w - m, m + sc(6), sc(3)),
+                         fill=ACCENT, outline="", smooth=True)
+        c.create_text(sc(30), sc(42), anchor="w", text="원가비교 프로그램",
+                      fill=INK, font=(FONT, 14, "bold"))
+        c.create_text(sc(30), sc(63), anchor="w", text="로그인 후 이용할 수 있습니다",
+                      fill=MUTED, font=(FONT, 9))
+        c.create_line(sc(26), sc(80), w - sc(26), sc(80), fill=HAIRLINE)
+        cls = c.create_text(w - sc(28), sc(44), text="✕", fill="#9aa3a0", font=(FONT, 12))
+        c.tag_bind(cls, "<Button-1>", lambda e: self.destroy())
+        c.tag_bind(cls, "<Enter>", lambda e: c.itemconfig(cls, fill="#dc2626"))
+        c.tag_bind(cls, "<Leave>", lambda e: c.itemconfig(cls, fill="#9aa3a0"))
 
-        body = tk.Frame(dlg, bg=BG)
-        body.pack(fill="both", expand=True, padx=sc(26), pady=sc(18))
-        tk.Label(body, text="아이디", bg=BG, fg=TEXT, font=(FONT, 10)).grid(
+        # 헤더 영역 드래그로 창 이동(테두리 없는 창)
+        drag = {"x": 0, "y": 0}
+        c.bind("<Button-1>", lambda e: drag.update(x=e.x, y=e.y))
+        c.bind("<B1-Motion>", lambda e: dlg.geometry(
+            f"+{dlg.winfo_x() + e.x - drag['x']}+{dlg.winfo_y() + e.y - drag['y']}"))
+
+        form = tk.Frame(dlg, bg="white")
+        form.place(x=sc(30), y=sc(94), width=w - sc(60), height=h - sc(108))
+        tk.Label(form, text="아이디", bg="white", fg=TEXT, font=(FONT, 10)).grid(
             row=0, column=0, sticky="w", pady=(0, 2))
         v_user = tk.StringVar()
-        e_user = ttk.Entry(body, textvariable=v_user, width=28)
+        e_user = ttk.Entry(form, textvariable=v_user)
         e_user.grid(row=1, column=0, sticky="ew", ipady=sc(3))
-        tk.Label(body, text="비밀번호", bg=BG, fg=TEXT, font=(FONT, 10)).grid(
+        tk.Label(form, text="비밀번호", bg="white", fg=TEXT, font=(FONT, 10)).grid(
             row=2, column=0, sticky="w", pady=(10, 2))
         v_pw = tk.StringVar()
-        e_pw = ttk.Entry(body, textvariable=v_pw, width=28, show="*")
+        e_pw = ttk.Entry(form, textvariable=v_pw, show="*")
         e_pw.grid(row=3, column=0, sticky="ew", ipady=sc(3))
-        body.columnconfigure(0, weight=1)
+        form.columnconfigure(0, weight=1)
 
         v_status = tk.StringVar(value="")
-        lb_status = tk.Label(body, textvariable=v_status, bg=BG, fg="#dc2626",
-                             font=(FONT, 9), wraplength=sc(280), justify="left")
-        lb_status.grid(row=4, column=0, sticky="w", pady=(10, 4))
+        tk.Label(form, textvariable=v_status, bg="white", fg="#dc2626",
+                 font=(FONT, 9), wraplength=w - sc(70), justify="left").grid(
+                     row=4, column=0, sticky="w", pady=(10, 4))
 
-        btnrow = tk.Frame(body, bg=BG)
-        btnrow.grid(row=5, column=0, sticky="ew", pady=(2, 0))
-        btn_login = accent_button(btnrow, "로그인", lambda: do_login())
+        btnrow = tk.Frame(form, bg="white")
+        btnrow.grid(row=5, column=0, sticky="ew", pady=(4, 0))
+        btn_login = accent_button(btnrow, "로그인", lambda: do_login(), bg="white")
         btn_login.pack(side="left")
-        gray_button(btnrow, "회원가입", lambda: self._show_register(dlg)).pack(side="left", padx=8)
+        gray_button(btnrow, "회원가입", lambda: self._show_register(dlg), bg="white").pack(side="left", padx=8)
 
         def set_busy(b):
             v_status.set("로그인 중…" if b else v_status.get())
@@ -1374,12 +1402,9 @@ class App(tk.Tk):
 
         e_user.bind("<Return>", lambda e: e_pw.focus_set())
         e_pw.bind("<Return>", lambda e: do_login())
-        self._center_window(dlg, sc(360), sc(300))
-        # 메인 창이 withdraw 상태이므로 transient 로 묶으면 로그인 창도 숨겨진다 → 사용 안 함
-        dlg.deiconify()
+        # 메인 창이 withdraw 상태이므로 transient 로 묶지 않고 직접 표시
         dlg.lift()
         dlg.focus_force()
-        dlg.attributes("-topmost", True)
         dlg.after(350, lambda: dlg.winfo_exists() and dlg.attributes("-topmost", False))
         dlg.grab_set()
         e_user.focus_set()
@@ -1398,8 +1423,10 @@ class App(tk.Tk):
         body.pack(fill="both", expand=True, padx=sc(24), pady=sc(18))
         tk.Label(body, text="회원가입 (관리자 승인 후 사용)", bg=BG, fg=TEXT,
                  font=(FONT, 11, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 10))
-        v_u = tk.StringVar(); v_p = tk.StringVar(); v_p2 = tk.StringVar()
+        v_u = tk.StringVar(); v_name = tk.StringVar()
+        v_p = tk.StringVar(); v_p2 = tk.StringVar()
         rows = [("아이디 (3자 이상)", v_u, False),
+                ("사용자 이름", v_name, False),
                 ("비밀번호 (4자 이상)", v_p, True),
                 ("비밀번호 확인", v_p2, True)]
         entries = []
@@ -1410,17 +1437,20 @@ class App(tk.Tk):
             e.grid(row=2 + i * 2, column=0, sticky="ew", ipady=sc(3))
             entries.append(e)
         body.columnconfigure(0, weight=1)
+        nrows = len(rows)
         v_status = tk.StringVar(value="")
         tk.Label(body, textvariable=v_status, bg=BG, fg="#dc2626", font=(FONT, 9),
-                 wraplength=sc(280), justify="left").grid(row=7, column=0, sticky="w", pady=(10, 4))
+                 wraplength=sc(280), justify="left").grid(
+                     row=1 + nrows * 2, column=0, sticky="w", pady=(10, 4))
         btnrow = tk.Frame(body, bg=BG)
-        btnrow.grid(row=8, column=0, sticky="ew", pady=(2, 0))
+        btnrow.grid(row=2 + nrows * 2, column=0, sticky="ew", pady=(2, 0))
         btn = accent_button(btnrow, "가입 신청", lambda: submit())
         btn.pack(side="left")
         gray_button(btnrow, "닫기", dlg.destroy).pack(side="left", padx=8)
 
         def submit():
-            u, p, p2 = v_u.get().strip(), v_p.get(), v_p2.get()
+            u, nm, p, p2 = (v_u.get().strip(), v_name.get().strip(),
+                            v_p.get(), v_p2.get())
             if p != p2:
                 v_status.set("비밀번호가 일치하지 않습니다.")
                 return
@@ -1429,7 +1459,7 @@ class App(tk.Tk):
 
             def work():
                 try:
-                    backend.register(u, p)
+                    backend.register(u, p, nm)
                     self.after(0, done)
                 except (backend.AuthError, backend.BackendError) as e:
                     self.after(0, lambda: err(str(e)))
@@ -1446,7 +1476,7 @@ class App(tk.Tk):
                 btn.configure(state="normal")
             threading.Thread(target=work, daemon=True).start()
 
-        self._center_window(dlg, sc(340), sc(330))
+        self._center_window(dlg, sc(340), sc(400))
         dlg.transient(parent)
         dlg.grab_set()
         entries[0].focus_set()
@@ -1485,8 +1515,9 @@ class App(tk.Tk):
 
         body = tk.Frame(dlg, bg=BG)
         body.pack(fill="both", expand=True, padx=sc(14), pady=sc(12))
-        cols = ("username", "status", "role", "created_at")
-        heads = {"username": "아이디", "status": "상태", "role": "권한", "created_at": "가입일시"}
+        cols = ("username", "name", "status", "role", "created_at")
+        heads = {"username": "아이디", "name": "이름", "status": "상태",
+                 "role": "권한", "created_at": "가입일시"}
         tf = tk.Frame(body, bg=BORDER)
         tf.pack(fill="both", expand=True)
         tree = ttk.Treeview(tf, show="headings", columns=cols, height=10)
@@ -1521,7 +1552,8 @@ class App(tk.Tk):
             users.sort(key=lambda u: (u.get("status") != "pending", u.get("username", "")))
             for u in users:
                 tree.insert("", "end", iid=u.get("username", ""), values=(
-                    u.get("username", ""), STAT.get(u.get("status"), u.get("status", "")),
+                    u.get("username", ""), u.get("name", ""),
+                    STAT.get(u.get("status"), u.get("status", "")),
                     "관리자" if u.get("role") == "admin" else "사용자",
                     u.get("created_at", "")))
             pend = sum(1 for u in users if u.get("status") == "pending")
@@ -1553,7 +1585,7 @@ class App(tk.Tk):
         gray_button(bar, "새로고침", refresh).pack(side="left", padx=6)
         gray_button(bar, "닫기", dlg.destroy).pack(side="right")
 
-        self._center_window(dlg, sc(620), sc(440))
+        self._center_window(dlg, sc(720), sc(440))
         dlg.transient(self)
         refresh()
 

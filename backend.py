@@ -145,11 +145,14 @@ def authenticate(username: str, password: str) -> dict:
     return {"username": u["username"], "role": u.get("role", "user"), "status": st}
 
 
-def register(username: str, password: str) -> None:
+def register(username: str, password: str, name: str = "") -> None:
     """회원가입 — status='pending'으로 등록(관리자 승인 필요)."""
     username = (username or "").strip()
+    name = (name or "").strip()
     if len(username) < 3:
         raise AuthError("아이디는 3자 이상이어야 합니다.")
+    if not name:
+        raise AuthError("사용자 이름을 입력하세요.")
     if len(password) < 4:
         raise AuthError("비밀번호는 4자 이상이어야 합니다.")
     if username.lower() == ADMIN_USERNAME.lower():
@@ -159,7 +162,7 @@ def register(username: str, password: str) -> None:
         raise AuthError("이미 존재하는 아이디입니다.")
     salt, h = hash_password(password)
     data["users"].append({
-        "username": username, "salt": salt, "hash": h,
+        "username": username, "name": name, "salt": salt, "hash": h,
         "role": "user", "status": "pending",
         "created_at": time.strftime("%Y-%m-%d %H:%M"),
     })
