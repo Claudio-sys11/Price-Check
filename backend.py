@@ -171,16 +171,36 @@ def register(username: str, password: str, name: str = "", phone: str = "") -> N
         raise AuthError("비밀번호는 4자 이상이어야 합니다.")
     if username.lower() == ADMIN_USERNAME.lower():
         raise AuthError("사용할 수 없는 아이디입니다.")
-    data, sha = _load_users()
-    if _find(data["users"], username):
-        raise AuthError("이미 존재하는 아이디입니다.")
     salt, h = hash_password(password)
-    data["users"].append({
-        "username": username, "name": name, "phone": phone, "salt": salt, "hash": h,
-        "role": "user", "status": "pending", "approved_notified": False,
-        "created_at": time.strftime("%Y-%m-%d %H:%M"),
-    })
-    _put_file(USERS_PATH, data, sha, f"register {username}")
+
+    def modify(data):
+        if _find(data["users"], username):
+            raise AuthError("이미 존재하는 아이디입니다.")
+        data["users"].append({
+            "username": username, "name": name, "phone": phone, "salt": salt, "hash": h,
+            "role": "user", "status": "pending", "approved_notified": False,
+            "created_at": time.strftime("%Y-%m-%d %H:%M"),
+        })
+    _commit_users(modify, f"register {username}")
+
+
+def _commit_users(modify, message, retries: int = 4) -> None:
+    """users.json 을 안전하게 갱신. modify(data) 가 검증/변경 수행. 409(sha 충돌)는 재시도."""
+    last = None
+    for _ in range(max(1, retries)):
+        data, sha = _load_users()
+        modify(data)                      # 검증 예외(AuthError)는 그대로 전파
+        try:
+            _put_file(USERS_PATH, data, sha, message)
+            return
+        except BackendError as e:
+            if "(409)" in str(e):         # 동시/연속 쓰기 sha 충돌 → 재시도
+                last = e
+                time.sleep(0.5)
+                continue
+            raise
+    if last:
+        raise last
 
 
 # ---------------- 관리자: 사용자 관리 ----------------
@@ -194,14 +214,15 @@ def set_user_status(username: str, status: str) -> None:
     """status: approved / rejected / pending."""
     if status not in ("approved", "rejected", "pending"):
         raise AuthError("잘못된 상태값입니다.")
-    data, sha = _load_users()
-    u = _find(data["users"], username)
-    if not u:
-        raise AuthError("사용자를 찾을 수 없습니다.")
-    u["status"] = status
-    if status == "approved":
-        u["approved_notified"] = False   # 승인 시 다음 로그인에서 안내
-    _put_file(USERS_PATH, data, sha, f"{status} {username}")
+
+    def modify(data):
+        u = _find(data["users"], username)
+        if not u:
+            raise AuthError("사용자를 찾을 수 없습니다.")
+        u["status"] = status
+        if status == "approved":
+            u["approved_notified"] = False   # 승인 시 다음 로그인에서 안내
+    _commit_users(modify, f"{status} {username}")
 
 
 def rename_user(old: str, new: str) -> None:
@@ -211,25 +232,42 @@ def rename_user(old: str, new: str) -> None:
         raise AuthError("아이디는 3자 이상이어야 합니다.")
     if new.lower() == ADMIN_USERNAME.lower():
         raise AuthError("사용할 수 없는 아이디입니다.")
-    data, sha = _load_users()
-    u = _find(data["users"], old)
-    if not u:
-        raise AuthError("사용자를 찾을 수 없습니다.")
-    if (old or "").strip().lower() != new.lower() and _find(data["users"], new):
-        raise AuthError("이미 존재하는 아이디입니다.")
-    u["username"] = new
-    _put_file(USERS_PATH, data, sha, f"rename {old} -> {new}")
+
+    def modify(data):
+        u = _find(data["users"], old)
+        if not u:
+            raise AuthError("사용자를 찾을 수 없습니다.")
+        if (old or "").strip().lower() != new.lower() and _find(data["users"], new):
+            raise AuthError("이미 존재하는 아이디입니다.")
+        u["username"] = new
+    _commit_users(modify, f"rename {old} -> {new}")
+
+
+def change_password(username: str, old_pw: str, new_pw: str) -> None:
+    """본인 비밀번호 변경(현재 비밀번호 확인 후). 관리자(고정)는 변경 불가."""
+    if (username or "").lower() == ADMIN_USERNAME.lower():
+        raise AuthError("관리자 비밀번호는 프로그램에 고정되어 변경할 수 없습니다.")
+    if len(new_pw or "") < 4:
+        raise AuthError("새 비밀번호는 4자 이상이어야 합니다.")
+    salt, h = hash_password(new_pw)
+
+    def modify(data):
+        u = _find(data["users"], username)
+        if not u or not verify_password(old_pw, u.get("salt", ""), u.get("hash", "")):
+            raise AuthError("현재 비밀번호가 올바르지 않습니다.")
+        u["salt"], u["hash"] = salt, h
+    _commit_users(modify, f"chgpw {username}")
 
 
 def delete_user(username: str) -> None:
-    data, sha = _load_users()
-    before = len(data["users"])
-    data["users"] = [u for u in data["users"]
-                     if str(u.get("username", "")).strip().lower()
-                     != (username or "").strip().lower()]
-    if len(data["users"]) == before:
-        raise AuthError("사용자를 찾을 수 없습니다.")
-    _put_file(USERS_PATH, data, sha, f"delete {username}")
+    def modify(data):
+        before = len(data["users"])
+        data["users"][:] = [u for u in data["users"]
+                            if str(u.get("username", "")).strip().lower()
+                            != (username or "").strip().lower()]
+        if len(data["users"]) == before:
+            raise AuthError("사용자를 찾을 수 없습니다.")
+    _commit_users(modify, f"delete {username}")
 
 
 # ---------------- 공유 일일현황 ----------------

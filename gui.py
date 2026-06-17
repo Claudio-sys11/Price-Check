@@ -1230,24 +1230,29 @@ class App(tk.Tk):
         tw = tkfont.Font(family=FONT, size=15, weight="bold").measure(title)
         c.create_text(sc(38) + tw + sc(14), h // 2 + 1, anchor="w", text=f"v{APP_VERSION}",
                       fill=GOLD_SOFT, font=(FONT, 10))
-        if self._auth:   # 로그인 상태: 사용자 표시 + 로그아웃 버튼
+        if self._auth:   # 로그인 상태: 사용자 표시 + 비밀번호 변경 / 로그아웃 버튼
             disp = self._display_user(self._auth.get("username", ""))
             role = "관리자" if self._auth.get("role") == "admin" else "사용자"
-            pw_, ph_ = sc(80), sc(28)
-            px2 = w - sc(18)
-            px1 = px2 - pw_
+            ph_ = sc(28)
             py1, py2 = h // 2 - ph_ // 2, h // 2 + ph_ // 2
-            pill = c.create_polygon(_round_rect_points(px1, py1, px2, py2, sc(14)),
-                                    fill="white", outline="", smooth=True)
-            txt = c.create_text((px1 + px2) // 2, h // 2, text="로그아웃",
-                                fill=HEADER_DARK, font=(FONT, 9, "bold"))
-            for it in (pill, txt):
-                c.tag_bind(it, "<Button-1>", lambda e: self._logout())
-                c.tag_bind(it, "<Enter>", lambda e: (c.itemconfig(pill, fill="#eafff9"),
-                                                     c.configure(cursor="hand2")))
-                c.tag_bind(it, "<Leave>", lambda e: (c.itemconfig(pill, fill="white"),
-                                                     c.configure(cursor="")))
-            c.create_text(px1 - sc(12), h // 2, anchor="e",
+
+            def _pill(x2, width, label, cmd):
+                x1 = x2 - width
+                p = c.create_polygon(_round_rect_points(x1, py1, x2, py2, sc(14)),
+                                     fill="white", outline="", smooth=True)
+                t = c.create_text((x1 + x2) // 2, h // 2, text=label,
+                                  fill=HEADER_DARK, font=(FONT, 9, "bold"))
+                for it in (p, t):
+                    c.tag_bind(it, "<Button-1>", lambda e: cmd())
+                    c.tag_bind(it, "<Enter>", lambda e: (c.itemconfig(p, fill="#eafff9"),
+                                                         c.configure(cursor="hand2")))
+                    c.tag_bind(it, "<Leave>", lambda e: (c.itemconfig(p, fill="white"),
+                                                         c.configure(cursor="")))
+                return x1
+
+            lo_x1 = _pill(w - sc(18), sc(80), "로그아웃", self._logout)
+            pc_x1 = _pill(lo_x1 - sc(8), sc(102), "비밀번호 변경", self._change_password)
+            c.create_text(pc_x1 - sc(12), h // 2, anchor="e",
                           text=f"{disp} · {role}", fill=ACCENT_SOFT, font=(FONT, 9))
         else:
             c.create_text(w - sc(20), h // 2, anchor="e",
@@ -1714,6 +1719,126 @@ class App(tk.Tk):
         self._build_tabbar(admin=False)   # 관리자 탭 제거
         self.withdraw()
         self._show_login()
+
+    def _change_password(self) -> None:
+        """비밀번호 변경 팝업(로그인/회원가입과 동일한 둥근 디자인)."""
+        username = (self._auth or {}).get("username", "")
+        if not username:
+            return
+        KEY = "#FF00FE"
+        INDIGO, INDIGO_DK = "#1E0A5C", "#160848"
+        dlg = tk.Toplevel(self)
+        dlg.overrideredirect(True)
+        w, h = sc(384), sc(548)
+        sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+        gx, gy = (sw - w) // 2, (sh - h) // 4
+        dlg.geometry(f"{w}x{h}+{max(0, gx)}+{max(0, gy)}")
+        cbg = "white"
+        try:
+            dlg.attributes("-topmost", True)
+            dlg.attributes("-transparentcolor", KEY)
+            dlg.configure(bg=KEY)
+            cbg = KEY
+        except tk.TclError:
+            dlg.configure(bg="white")
+
+        c = tk.Canvas(dlg, width=w, height=h, bg=cbg, highlightthickness=0, bd=0)
+        c.pack(fill="both", expand=True)
+        m, rad = sc(7), sc(30)
+        c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
+                         fill="white", outline=HAIRLINE, width=1, smooth=True)
+        c.create_polygon(
+            _round_rect_points(w // 2 - sc(24), sc(18), w // 2 + sc(24), sc(22), sc(2)),
+            fill=GOLD, outline="", smooth=True)
+        try:
+            ic = tk.PhotoImage(file=resource_path("assets/app_icon.png"))
+            f = max(1, round(ic.width() / sc(40)))
+            ic = ic.subsample(f, f)
+        except tk.TclError:
+            ic = None
+        self._chpw_icon = ic
+        if ic is not None:
+            c.create_image(w // 2, sc(56), image=ic)
+        c.create_text(w // 2, sc(104), text="Price Check", fill=INDIGO,
+                      font=self._script_font(22))
+        c.create_text(w // 2, sc(130), text="비밀번호 변경", fill="#6b7280", font=(FONT, 11))
+        c.create_line(w // 2 - sc(28), sc(150), w // 2 + sc(28), sc(150),
+                      fill=GOLD, width=1)
+        c.create_text(w // 2, h - sc(40), text="THE FEEL KOREA CO.,LTD.",
+                      fill="#a3a8a6", font=(FONT, 10))
+        c.create_text(w // 2, h - sc(22), text="Created by Claudio Lim",
+                      fill="#bfc4c2", font=(FONT, 8))
+
+        cls = c.create_text(w - sc(26), sc(28), text="✕", fill="#c4cbc8", font=(FONT, 11))
+        c.tag_bind(cls, "<Button-1>", lambda e: dlg.destroy())
+        c.tag_bind(cls, "<Enter>", lambda e: c.itemconfig(cls, fill="#dc2626"))
+        c.tag_bind(cls, "<Leave>", lambda e: c.itemconfig(cls, fill="#c4cbc8"))
+        drag = {"x": 0, "y": 0}
+        c.bind("<Button-1>", lambda e: drag.update(x=e.x, y=e.y))
+        c.bind("<B1-Motion>", lambda e: dlg.geometry(
+            f"+{dlg.winfo_x() + e.x - drag['x']}+{dlg.winfo_y() + e.y - drag['y']}"))
+
+        form = tk.Frame(dlg, bg="white")
+        form.place(x=sc(40), y=sc(170), width=w - sc(80), height=h - sc(224))
+        form.columnconfigure(0, weight=1)
+        v_old = tk.StringVar(); v_new = tk.StringVar(); v_new2 = tk.StringVar()
+        fields = [("현재 비밀번호", v_old),
+                  ("새 비밀번호 (4자 이상)", v_new),
+                  ("새 비밀번호 확인", v_new2)]
+        entries = []
+        for i, (lbl, var) in enumerate(fields):
+            tk.Label(form, text=lbl, bg="white", fg="#9aa3a0", font=(FONT, 9)).grid(
+                row=i * 2, column=0, sticky="w", pady=(0 if i == 0 else 10, 2))
+            e = ttk.Entry(form, textvariable=var, show="*")
+            e.grid(row=i * 2 + 1, column=0, sticky="ew", ipady=sc(4))
+            entries.append(e)
+        nf = len(fields)
+        v_status = tk.StringVar(value="")
+        tk.Label(form, textvariable=v_status, bg="white", fg="#dc2626", font=(FONT, 9),
+                 wraplength=w - sc(96), justify="left").grid(
+                     row=nf * 2, column=0, sticky="w", pady=(10, 2))
+        btn = RoundedButton(form, "변경", lambda: submit(), bg="white",
+                            fill=INDIGO, fill_active=INDIGO_DK, fill_disabled="#b3aad4",
+                            fg="white", fg_disabled="#e7e2f5", height=42, radius=21)
+        btn.grid(row=nf * 2 + 1, column=0, sticky="ew", pady=(6, 0))
+        link = tk.Label(form, text="닫기", bg="white", fg="#6b7280",
+                        font=(FONT, 9, "underline"), cursor="hand2")
+        link.grid(row=nf * 2 + 2, column=0, pady=(10, 0))
+        link.bind("<Button-1>", lambda e: dlg.destroy())
+
+        def submit():
+            o, n, n2 = v_old.get(), v_new.get(), v_new2.get()
+            if n != n2:
+                v_status.set("새 비밀번호가 일치하지 않습니다.")
+                return
+            v_status.set("변경 중…")
+            btn.configure(state="disabled")
+
+            def work():
+                try:
+                    backend.change_password(username, o, n)
+                    self.after(0, done)
+                except (backend.AuthError, backend.BackendError) as e:
+                    self.after(0, lambda: err(str(e)))
+                except Exception as e:   # noqa: BLE001
+                    self.after(0, lambda: err(f"오류: {e}"))
+
+            def done():
+                dlg.destroy()
+                pmsg.showinfo("비밀번호 변경",
+                              "비밀번호가 변경되었습니다.\n다음 로그인부터 새 비밀번호를 사용하세요.")
+
+            def err(msg):
+                v_status.set(msg)
+                btn.configure(state="normal")
+            threading.Thread(target=work, daemon=True).start()
+
+        entries[-1].bind("<Return>", lambda e: submit())
+        dlg.lift()
+        dlg.focus_force()
+        dlg.after(350, lambda: dlg.winfo_exists() and dlg.attributes("-topmost", False))
+        dlg.grab_set()
+        entries[0].focus_set()
 
     # ----- 탭: 사용자 관리(관리자 전용) -----
     def _build_user_admin_tab(self) -> None:
