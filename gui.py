@@ -25,6 +25,7 @@ from tksheet import Sheet
 from ecount_api import EcountClient, EcountApiError
 import compare as cmp
 import updater
+import backend
 from version import APP_VERSION
 
 APP_NAME = "EcountInventory"
@@ -1053,6 +1054,7 @@ class App(tk.Tk):
         self._inventory_raw: dict | None = None
         self._compare_rows: list[dict] = []
         self._update_url: str = ""
+        self._auth: dict | None = None   # 로그인 사용자 {username, role, status}
 
         # 인증/설정 변수 (메인 화면엔 표시하지 않고 '설정' 메뉴 다이얼로그에서 입력)
         self.var_com = tk.StringVar(value=FIXED_COM_CODE)     # 고정
@@ -1204,6 +1206,7 @@ class App(tk.Tk):
         settings_menu.add_separator()
         settings_menu.add_command(label="종료", command=self.destroy)
         menubar.add_cascade(label="설정", menu=settings_menu)
+        self._menubar = menubar
         self.config(menu=menubar)
 
     def _open_settings(self) -> None:
@@ -1279,6 +1282,276 @@ class App(tk.Tk):
         save_price_cache({})
         pmsg.showinfo("입고단가 캐시", "입고단가 캐시를 비웠습니다.\n다음 조회 때 품목등록에서 다시 받아옵니다.")
 
+    # ================= 로그인 / 회원가입 / 사용자 관리 =================
+    def _center_window(self, win, w: int, h: int) -> None:
+        win.update_idletasks()
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        x, y = (sw - w) // 2, (sh - h) // 3
+        win.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
+
+    def _show_login(self) -> None:
+        dlg = tk.Toplevel(self)
+        dlg.title("로그인 — 원가비교 프로그램")
+        dlg.configure(bg=BG)
+        dlg.resizable(False, False)
+        dlg.protocol("WM_DELETE_WINDOW", self.destroy)   # 로그인 안 하면 종료
+
+        head = tk.Frame(dlg, bg=ACCENT, height=sc(60))
+        head.pack(fill="x")
+        head.pack_propagate(False)
+        tk.Label(head, text="원가비교 프로그램", bg=ACCENT, fg="white",
+                 font=(FONT, 15, "bold")).pack(side="left", padx=sc(20))
+
+        body = tk.Frame(dlg, bg=BG)
+        body.pack(fill="both", expand=True, padx=sc(26), pady=sc(18))
+        tk.Label(body, text="아이디", bg=BG, fg=TEXT, font=(FONT, 10)).grid(
+            row=0, column=0, sticky="w", pady=(0, 2))
+        v_user = tk.StringVar()
+        e_user = ttk.Entry(body, textvariable=v_user, width=28)
+        e_user.grid(row=1, column=0, sticky="ew", ipady=sc(3))
+        tk.Label(body, text="비밀번호", bg=BG, fg=TEXT, font=(FONT, 10)).grid(
+            row=2, column=0, sticky="w", pady=(10, 2))
+        v_pw = tk.StringVar()
+        e_pw = ttk.Entry(body, textvariable=v_pw, width=28, show="*")
+        e_pw.grid(row=3, column=0, sticky="ew", ipady=sc(3))
+        body.columnconfigure(0, weight=1)
+
+        v_status = tk.StringVar(value="")
+        lb_status = tk.Label(body, textvariable=v_status, bg=BG, fg="#dc2626",
+                             font=(FONT, 9), wraplength=sc(280), justify="left")
+        lb_status.grid(row=4, column=0, sticky="w", pady=(10, 4))
+
+        btnrow = tk.Frame(body, bg=BG)
+        btnrow.grid(row=5, column=0, sticky="ew", pady=(2, 0))
+        btn_login = accent_button(btnrow, "로그인", lambda: do_login())
+        btn_login.pack(side="left")
+        gray_button(btnrow, "회원가입", lambda: self._show_register(dlg)).pack(side="left", padx=8)
+
+        def set_busy(b):
+            v_status.set("로그인 중…" if b else v_status.get())
+            try:
+                btn_login.configure(state="disabled" if b else "normal")
+            except Exception:
+                pass
+
+        def do_login():
+            u, p = v_user.get().strip(), v_pw.get()
+            if not u or not p:
+                v_status.set("아이디와 비밀번호를 입력하세요.")
+                return
+            set_busy(True)
+
+            def work():
+                try:
+                    auth = backend.authenticate(u, p)
+                    self.after(0, lambda: ok(auth))
+                except backend.AuthError as e:
+                    self.after(0, lambda: fail(str(e)))
+                except backend.BackendError as e:
+                    self.after(0, lambda: fail(f"서버 연결 오류: {e}"))
+                except Exception as e:   # noqa: BLE001
+                    self.after(0, lambda: fail(f"오류: {e}"))
+            threading.Thread(target=work, daemon=True).start()
+
+        def ok(auth):
+            self._auth = auth
+            try:
+                dlg.grab_release()
+            except Exception:
+                pass
+            dlg.destroy()
+            self._apply_auth_role()
+            self.deiconify()
+            self.lift()
+            self._render_daily()
+
+        def fail(msg):
+            v_status.set(msg)
+            try:
+                btn_login.configure(state="normal")
+            except Exception:
+                pass
+
+        e_user.bind("<Return>", lambda e: e_pw.focus_set())
+        e_pw.bind("<Return>", lambda e: do_login())
+        self._center_window(dlg, sc(360), sc(300))
+        dlg.transient(self)
+        dlg.grab_set()
+        e_user.focus_set()
+
+    def _show_register(self, parent) -> None:
+        if not backend.backend_enabled():
+            pmsg.showwarning("회원가입 불가",
+                             "공유 서버가 아직 설정되지 않아 회원가입을 사용할 수 없습니다.\n"
+                             "관리자(THEFEELKOREA)로 로그인하거나 관리자에게 문의하세요.")
+            return
+        dlg = tk.Toplevel(self)
+        dlg.title("회원가입")
+        dlg.configure(bg=BG)
+        dlg.resizable(False, False)
+        body = tk.Frame(dlg, bg=BG)
+        body.pack(fill="both", expand=True, padx=sc(24), pady=sc(18))
+        tk.Label(body, text="회원가입 (관리자 승인 후 사용)", bg=BG, fg=TEXT,
+                 font=(FONT, 11, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        v_u = tk.StringVar(); v_p = tk.StringVar(); v_p2 = tk.StringVar()
+        rows = [("아이디 (3자 이상)", v_u, False),
+                ("비밀번호 (4자 이상)", v_p, True),
+                ("비밀번호 확인", v_p2, True)]
+        entries = []
+        for i, (lbl, var, hide) in enumerate(rows):
+            tk.Label(body, text=lbl, bg=BG, fg=TEXT, font=(FONT, 10)).grid(
+                row=1 + i * 2, column=0, sticky="w", pady=(6, 2))
+            e = ttk.Entry(body, textvariable=var, width=28, show="*" if hide else "")
+            e.grid(row=2 + i * 2, column=0, sticky="ew", ipady=sc(3))
+            entries.append(e)
+        body.columnconfigure(0, weight=1)
+        v_status = tk.StringVar(value="")
+        tk.Label(body, textvariable=v_status, bg=BG, fg="#dc2626", font=(FONT, 9),
+                 wraplength=sc(280), justify="left").grid(row=7, column=0, sticky="w", pady=(10, 4))
+        btnrow = tk.Frame(body, bg=BG)
+        btnrow.grid(row=8, column=0, sticky="ew", pady=(2, 0))
+        btn = accent_button(btnrow, "가입 신청", lambda: submit())
+        btn.pack(side="left")
+        gray_button(btnrow, "닫기", dlg.destroy).pack(side="left", padx=8)
+
+        def submit():
+            u, p, p2 = v_u.get().strip(), v_p.get(), v_p2.get()
+            if p != p2:
+                v_status.set("비밀번호가 일치하지 않습니다.")
+                return
+            v_status.set("가입 신청 중…")
+            btn.configure(state="disabled")
+
+            def work():
+                try:
+                    backend.register(u, p)
+                    self.after(0, done)
+                except (backend.AuthError, backend.BackendError) as e:
+                    self.after(0, lambda: err(str(e)))
+                except Exception as e:   # noqa: BLE001
+                    self.after(0, lambda: err(f"오류: {e}"))
+
+            def done():
+                dlg.destroy()
+                pmsg.showinfo("가입 신청 완료",
+                              "가입 신청이 접수되었습니다.\n관리자 승인 후 로그인할 수 있습니다.")
+
+            def err(msg):
+                v_status.set(msg)
+                btn.configure(state="normal")
+            threading.Thread(target=work, daemon=True).start()
+
+        self._center_window(dlg, sc(340), sc(330))
+        dlg.transient(parent)
+        dlg.grab_set()
+        entries[0].focus_set()
+
+    def _apply_auth_role(self) -> None:
+        """로그인 사용자에 맞춰 제목/메뉴를 갱신(관리자면 사용자 관리 메뉴 추가)."""
+        a = self._auth or {}
+        uname = a.get("username", "")
+        role = a.get("role", "user")
+        rolelbl = "관리자" if role == "admin" else "사용자"
+        self.title(f"실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교  "
+                   f"v{APP_VERSION}   [{uname} · {rolelbl}]")
+        if role == "admin" and not getattr(self, "_admin_menu_added", False):
+            mb = getattr(self, "_menubar", None)
+            if mb is not None:
+                admin_menu = tk.Menu(mb, tearoff=0, background="white", foreground=TEXT,
+                                     activebackground=ACCENT, activeforeground="white")
+                admin_menu.add_command(label="사용자 관리…", command=self._open_user_admin)
+                mb.add_cascade(label="관리자", menu=admin_menu)
+                self._admin_menu_added = True
+
+    def _open_user_admin(self) -> None:
+        if (self._auth or {}).get("role") != "admin":
+            return
+        if not backend.backend_enabled():
+            pmsg.showwarning("사용자 관리 불가",
+                             "공유 서버가 설정되지 않아 사용자 관리를 사용할 수 없습니다(토큰 미설정).")
+            return
+        dlg = tk.Toplevel(self)
+        dlg.title("사용자 관리")
+        dlg.configure(bg=BG)
+        head = tk.Frame(dlg, bg=ACCENT, height=sc(48))
+        head.pack(fill="x"); head.pack_propagate(False)
+        tk.Label(head, text="사용자 관리 — 가입 승인 / 거절 / 삭제", bg=ACCENT, fg="white",
+                 font=(FONT, 12, "bold")).pack(side="left", padx=sc(18))
+
+        body = tk.Frame(dlg, bg=BG)
+        body.pack(fill="both", expand=True, padx=sc(14), pady=sc(12))
+        cols = ("username", "status", "role", "created_at")
+        heads = {"username": "아이디", "status": "상태", "role": "권한", "created_at": "가입일시"}
+        tf = tk.Frame(body, bg=BORDER)
+        tf.pack(fill="both", expand=True)
+        tree = ttk.Treeview(tf, show="headings", columns=cols, height=10)
+        for c in cols:
+            tree.heading(c, text=heads[c])
+            tree.column(c, anchor="center",
+                        width=(sc(160) if c == "username" else sc(110)), stretch=True)
+        ysb = ttk.Scrollbar(tf, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=ysb.set)
+        tree.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
+        ysb.grid(row=0, column=1, sticky="ns")
+        tf.rowconfigure(0, weight=1); tf.columnconfigure(0, weight=1)
+
+        v_status = tk.StringVar(value="")
+        tk.Label(body, textvariable=v_status, bg=BG, fg=MUTED, font=(FONT, 9)).pack(
+            anchor="w", pady=(8, 2))
+
+        STAT = {"pending": "승인대기", "approved": "승인됨", "rejected": "거절됨"}
+
+        def refresh():
+            v_status.set("불러오는 중…")
+            def work():
+                try:
+                    users = backend.list_users()
+                    self.after(0, lambda: fill(users))
+                except Exception as e:   # noqa: BLE001
+                    self.after(0, lambda: v_status.set(f"오류: {e}"))
+            threading.Thread(target=work, daemon=True).start()
+
+        def fill(users):
+            tree.delete(*tree.get_children())
+            users.sort(key=lambda u: (u.get("status") != "pending", u.get("username", "")))
+            for u in users:
+                tree.insert("", "end", iid=u.get("username", ""), values=(
+                    u.get("username", ""), STAT.get(u.get("status"), u.get("status", "")),
+                    "관리자" if u.get("role") == "admin" else "사용자",
+                    u.get("created_at", "")))
+            pend = sum(1 for u in users if u.get("status") == "pending")
+            v_status.set(f"총 {len(users)}명 · 승인대기 {pend}명")
+
+        def selected():
+            sel = tree.selection()
+            return sel[0] if sel else None
+
+        def act(fn, label):
+            uname = selected()
+            if not uname:
+                v_status.set("대상 사용자를 선택하세요.")
+                return
+            v_status.set(f"{label} 처리 중…")
+            def work():
+                try:
+                    fn(uname)
+                    self.after(0, refresh)
+                except Exception as e:   # noqa: BLE001
+                    self.after(0, lambda: v_status.set(f"오류: {e}"))
+            threading.Thread(target=work, daemon=True).start()
+
+        bar = tk.Frame(body, bg=BG)
+        bar.pack(fill="x", pady=(6, 0))
+        accent_button(bar, "승인", lambda: act(lambda u: backend.set_user_status(u, "approved"), "승인")).pack(side="left")
+        gray_button(bar, "거절", lambda: act(lambda u: backend.set_user_status(u, "rejected"), "거절")).pack(side="left", padx=6)
+        gray_button(bar, "삭제", lambda: act(backend.delete_user, "삭제")).pack(side="left")
+        gray_button(bar, "새로고침", refresh).pack(side="left", padx=6)
+        gray_button(bar, "닫기", dlg.destroy).pack(side="right")
+
+        self._center_window(dlg, sc(620), sc(440))
+        dlg.transient(self)
+        refresh()
+
     # ================= 자동 업데이트 =================
     def _splash_update_then_start(self) -> None:
         """로딩 화면에서 최신 버전을 확인하고, 있으면 즉시 자동 설치한다."""
@@ -1321,6 +1594,9 @@ class App(tk.Tk):
         if sp is not None:
             sp.close()
             self._splash = None
+        if self._auth is None:
+            self._show_login()   # 로그인 성공 시에만 메인 표시
+            return
         self.deiconify()
         self.lift()
 
@@ -2473,11 +2749,21 @@ class App(tk.Tk):
             "unmatched": sum(1 for r in rows if r.get("_tag") == "unmatched"),
             "same": sum(1 for r in rows if r.get("_tag") == "same"),
         }
+        # 로컬 백업 저장(오프라인 대비)
         hist = [h for h in load_daily_status() if h.get("date") != rec["date"]]
         hist.append(rec)
         hist.sort(key=lambda h: h.get("date", ""))
         save_daily_status(hist)
-        if hasattr(self, "tree_daily"):
+        # 공유 저장소에 기록(모두가 볼 수 있도록)
+        if backend.backend_enabled():
+            def work():
+                try:
+                    backend.record_daily(rec)
+                except Exception:   # noqa: BLE001
+                    pass
+                self.after(0, self._render_daily)
+            threading.Thread(target=work, daemon=True).start()
+        elif hasattr(self, "tree_daily"):
             self._render_daily()
 
     def _build_daily_tab(self) -> None:
@@ -2528,8 +2814,24 @@ class App(tk.Tk):
     def _render_daily(self) -> None:
         if not hasattr(self, "tree_daily"):
             return
-        hist = load_daily_status()
+        if backend.backend_enabled():
+            self.daily_status.set("공유 기록 불러오는 중…")
+            def work():
+                try:
+                    hist = backend.load_daily()
+                except Exception:   # noqa: BLE001
+                    hist = load_daily_status()   # 오프라인 폴백(로컬 백업)
+                self.after(0, lambda: self._fill_daily(hist))
+            threading.Thread(target=work, daemon=True).start()
+        else:
+            self._fill_daily(load_daily_status())
+
+    def _fill_daily(self, hist: list) -> None:
+        if not hasattr(self, "tree_daily"):
+            return
+        hist = list(hist or [])
         hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")), reverse=True)
+        self._daily_cache = hist
         self.tree_daily.delete(*self.tree_daily.get_children())
 
         def cell(n, total):
@@ -2541,8 +2843,9 @@ class App(tk.Tk):
                 h.get("date", ""), h.get("time", ""), f"{t:,}",
                 cell(h.get("diff", 0), t), cell(h.get("nostock", 0), t),
                 cell(h.get("unmatched", 0), t), cell(h.get("same", 0), t)))
+        shared = " (공유)" if backend.backend_enabled() else ""
         self.daily_status.set(
-            f"총 {len(hist)}일치 기록" if hist
+            f"총 {len(hist)}일치 기록{shared}" if hist
             else "기록 없음 — 원가비교를 실행하면 자동 저장됩니다.")
         self._draw_diff_chart()
 
@@ -2559,8 +2862,8 @@ class App(tk.Tk):
         cv.create_text(sc(14), sc(13), text="원가차이 추이",
                        anchor="w", fill=TEXT, font=(FONT, 11, "bold"))
 
-        hist = load_daily_status()
-        hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")))
+        hist = sorted(getattr(self, "_daily_cache", []),
+                      key=lambda h: (h.get("date", ""), h.get("time", "")))
         hist = hist[-24:]
         if not hist:
             cv.create_text(W // 2, H // 2, text="기록 없음 — 원가비교를 실행하면 그래프가 표시됩니다.",
@@ -2610,7 +2913,7 @@ class App(tk.Tk):
                                fill=MUTED, font=(FONT, 8))
 
     def _export_daily(self) -> None:
-        hist = load_daily_status()
+        hist = list(getattr(self, "_daily_cache", []))
         if not hist:
             pmsg.showwarning("데이터 없음", "내보낼 일일현황 기록이 없습니다.")
             return

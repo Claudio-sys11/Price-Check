@@ -18,6 +18,8 @@ output/
 
 # 로컬 설정/비밀 (인증키 등) — 절대 커밋 금지
 config.json
+# 공유 백엔드 토큰·관리자 해시 (exe에만 내장, 공개 소스엔 미포함)
+_secret.py
 
 # 업체 데이터(가격·상품) — 공개 저장소 노출 방지
 data/wizfasta_products.json
