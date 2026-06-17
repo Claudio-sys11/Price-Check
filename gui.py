@@ -1289,6 +1289,17 @@ class App(tk.Tk):
         x, y = (sw - w) // 2, (sh - h) // 3
         win.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
 
+    def _cursive_font(self, size, weight="bold"):
+        """타이틀용 글꼴 — HY견명조 우선, 없으면 명조/궁서 계열, 최후 기본 폰트."""
+        try:
+            fams = set(tkfont.families())
+        except Exception:   # noqa: BLE001
+            fams = set()
+        for name in ("HY견명조", "HY견명조체", "HY신명조", "궁서", "Batang"):
+            if name in fams:
+                return (name, size, weight)
+        return (FONT, size, weight)
+
     def _show_login(self) -> None:
         KEY = "#FF00FE"   # 투명 처리 키 컬러(둥근 모서리)
         dlg = tk.Toplevel(self)
@@ -1314,11 +1325,23 @@ class App(tk.Tk):
                          fill="white", outline="", smooth=True)
         c.create_polygon(_round_rect_points(m, m, w - m, m + sc(6), sc(3)),
                          fill=ACCENT, outline="", smooth=True)
-        c.create_text(sc(30), sc(42), anchor="w", text="원가비교 프로그램",
-                      fill=INK, font=(FONT, 14, "bold"))
-        c.create_text(sc(30), sc(63), anchor="w", text="로그인 후 이용할 수 있습니다",
+        # 좌측 아이콘
+        try:
+            ic = tk.PhotoImage(file=resource_path("assets/app_icon.png"))
+            f = max(1, round(ic.width() / sc(40)))
+            ic = ic.subsample(f, f)
+        except tk.TclError:
+            ic = None
+        self._login_icon = ic   # 가비지컬렉션 방지(참조 유지)
+        tx = sc(30)
+        if ic is not None:
+            c.create_image(sc(30) + ic.width() // 2, sc(56), image=ic)
+            tx = sc(30) + ic.width() + sc(12)
+        c.create_text(tx, sc(46), anchor="w", text="원가비교 프로그램",
+                      fill=INK, font=self._cursive_font(17))
+        c.create_text(tx, sc(68), anchor="w", text="로그인 후 이용할 수 있습니다",
                       fill=MUTED, font=(FONT, 9))
-        c.create_line(sc(26), sc(80), w - sc(26), sc(80), fill=HAIRLINE)
+        c.create_line(sc(26), sc(86), w - sc(26), sc(86), fill=HAIRLINE)
         cls = c.create_text(w - sc(28), sc(44), text="✕", fill="#9aa3a0", font=(FONT, 12))
         c.tag_bind(cls, "<Button-1>", lambda e: self.destroy())
         c.tag_bind(cls, "<Enter>", lambda e: c.itemconfig(cls, fill="#dc2626"))
