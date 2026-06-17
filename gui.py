@@ -1375,7 +1375,12 @@ class App(tk.Tk):
         e_user.bind("<Return>", lambda e: e_pw.focus_set())
         e_pw.bind("<Return>", lambda e: do_login())
         self._center_window(dlg, sc(360), sc(300))
-        dlg.transient(self)
+        # 메인 창이 withdraw 상태이므로 transient 로 묶으면 로그인 창도 숨겨진다 → 사용 안 함
+        dlg.deiconify()
+        dlg.lift()
+        dlg.focus_force()
+        dlg.attributes("-topmost", True)
+        dlg.after(350, lambda: dlg.winfo_exists() and dlg.attributes("-topmost", False))
         dlg.grab_set()
         e_user.focus_set()
 
