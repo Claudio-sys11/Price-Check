@@ -2497,6 +2497,14 @@ class App(tk.Tk):
         self.daily_status = tk.StringVar(value="")
         ttk.Label(btns, textvariable=self.daily_status, style="Status.TLabel").pack(side="right")
 
+        # 원가차이 추이 그래프 (막대) — 일자별
+        cf = tk.Frame(root, bg=BORDER)
+        cf.pack(fill="x", padx=16, pady=(2, 8))
+        self.daily_chart = tk.Canvas(cf, bg=CARD, height=sc(210),
+                                     highlightthickness=0, bd=0)
+        self.daily_chart.pack(fill="x", expand=True, padx=1, pady=1)
+        self.daily_chart.bind("<Configure>", lambda e: self._draw_diff_chart())
+
         tf = tk.Frame(root, bg=BORDER)
         tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
         cols = ("date", "time", "total", "diff", "nostock", "unmatched", "same")
@@ -2507,7 +2515,7 @@ class App(tk.Tk):
         for c in cols:
             self.tree_daily.heading(c, text=heads[c])
             self.tree_daily.column(
-                c, anchor=("w" if c == "date" else "center"),
+                c, anchor="center",
                 width=(sc(130) if c == "date" else sc(108)), stretch=True)
         ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_daily.yview)
         self.tree_daily.configure(yscrollcommand=ysb.set)
@@ -2536,6 +2544,62 @@ class App(tk.Tk):
         self.daily_status.set(
             f"총 {len(hist)}일치 기록" if hist
             else "기록 없음 — 원가비교를 실행하면 자동 저장됩니다.")
+        self._draw_diff_chart()
+
+    def _draw_diff_chart(self) -> None:
+        """일자별 '원가차이' 수치를 막대그래프로 그린다(과거→현재, 최근 24일)."""
+        cv = getattr(self, "daily_chart", None)
+        if cv is None:
+            return
+        cv.delete("all")
+        W = cv.winfo_width()
+        H = cv.winfo_height()
+        if W < 60 or H < 60:
+            return
+        cv.create_text(sc(14), sc(13), text="원가차이 추이",
+                       anchor="w", fill=TEXT, font=(FONT, 11, "bold"))
+
+        hist = load_daily_status()
+        hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")))
+        hist = hist[-24:]
+        if not hist:
+            cv.create_text(W // 2, H // 2, text="기록 없음 — 원가비교를 실행하면 그래프가 표시됩니다.",
+                           fill=MUTED, font=(FONT, 10))
+            return
+
+        mL, mR, mT, mB = sc(40), sc(16), sc(36), sc(34)
+        plot_w = max(1, W - mL - mR)
+        plot_h = max(1, H - mT - mB)
+        base_y = H - mB
+        vals = [int(h.get("diff", 0) or 0) for h in hist]
+        maxv = max(vals + [1])
+
+        # y축 눈금(0 / 중간 / 최대) + 옅은 그리드라인
+        for frac in (0.0, 0.5, 1.0):
+            y = base_y - plot_h * frac
+            cv.create_line(mL, y, W - mR, y,
+                           fill=(BORDER if frac else MUTED), width=1)
+            cv.create_text(mL - sc(6), y, text=f"{round(maxv * frac):,}",
+                           anchor="e", fill=MUTED, font=(FONT, 8))
+
+        n = len(hist)
+        slot = plot_w / n
+        bar_w = min(slot * 0.62, sc(34))
+        lbl_step = max(1, (n + 11) // 12)   # 날짜 라벨 과밀 방지
+        for i, h in enumerate(hist):
+            v = vals[i]
+            xc = mL + slot * (i + 0.5)
+            bh = plot_h * v / maxv
+            top = base_y - bh
+            cv.create_rectangle(xc - bar_w / 2, top, xc + bar_w / 2, base_y,
+                                fill=DIFF_FG, outline="")
+            if bar_w >= sc(14) or v == maxv:
+                cv.create_text(xc, top - sc(8), text=f"{v:,}",
+                               fill=DIFF_FG, font=(FONT, 8, "bold"))
+            if i % lbl_step == 0 or i == n - 1:
+                d = str(h.get("date", ""))[5:]   # MM-DD
+                cv.create_text(xc, base_y + sc(11), text=d,
+                               fill=MUTED, font=(FONT, 8))
 
     def _export_daily(self) -> None:
         hist = load_daily_status()
