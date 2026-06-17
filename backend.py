@@ -26,7 +26,22 @@ except Exception:                     # pragma: no cover
 API = "https://api.github.com"
 USERS_PATH = "users.json"
 DAILY_PATH = "daily_status.json"
+ADMIN_PATH = "admin.json"          # 관리자 비밀번호 변경분(임베드 해시 대체)
 PBKDF2_ITERS = 200_000
+PW_MAX_DAYS = 30                   # 비밀번호 변경 주기(일)
+
+
+def _today_str() -> str:
+    return time.strftime("%Y-%m-%d")
+
+
+def _days_since(date_str) -> "int | None":
+    try:
+        y, m, d = (int(x) for x in str(date_str)[:10].split("-"))
+        from datetime import date
+        return (date.today() - date(y, m, d)).days
+    except Exception:   # noqa: BLE001
+        return None
 
 
 class BackendError(Exception):
@@ -128,11 +143,17 @@ def authenticate(username: str, password: str) -> dict:
     username = (username or "").strip()
     if not username or not password:
         raise AuthError("아이디와 비밀번호를 입력하세요.")
-    # 관리자(고정 자격증명)
+    # 관리자 — 변경분(admin.json)이 있으면 그것으로, 없으면 임베드 해시로 검증
     if username.lower() == ADMIN_USERNAME.lower():
-        if verify_password(password, ADMIN_SALT, ADMIN_HASH):
-            return {"username": ADMIN_USERNAME, "role": "admin", "status": "approved"}
-        raise AuthError("비밀번호가 올바르지 않습니다.")
+        ov, _sha = _load_admin()
+        a_salt = ov.get("salt") or ADMIN_SALT
+        a_hash = ov.get("hash") or ADMIN_HASH
+        if not verify_password(password, a_salt, a_hash):
+            raise AuthError("비밀번호가 올바르지 않습니다.")
+        days = _days_since(ov.get("pw_changed_at")) if ov.get("pw_changed_at") else None
+        return {"username": ADMIN_USERNAME, "name": "임정수", "role": "admin",
+                "status": "approved", "notice": "",
+                "pw_days": days, "pw_expired": bool(days is not None and days >= PW_MAX_DAYS)}
     data, sha = _load_users()
     u = _find(data["users"], username)
     if not u or not verify_password(password, u.get("salt", ""), u.get("hash", "")):
@@ -152,8 +173,21 @@ def authenticate(username: str, password: str) -> dict:
             pass
         notice = ("관리자 승인이 완료되었습니다. 가입을 환영합니다!\n"
                   "이제 모든 기능을 사용할 수 있습니다.")
+    days = _days_since(u.get("pw_changed_at") or u.get("created_at"))
     return {"username": u["username"], "name": u.get("name", ""),
-            "role": u.get("role", "user"), "status": st, "notice": notice}
+            "role": u.get("role", "user"), "status": st, "notice": notice,
+            "pw_days": days, "pw_expired": bool(days is not None and days >= PW_MAX_DAYS)}
+
+
+def _load_admin():
+    """admin.json (관리자 비밀번호 변경분) → (dict, sha). 없으면 ({}, None)."""
+    if not backend_enabled():
+        return {}, None
+    try:
+        data, sha = _get_file(ADMIN_PATH)
+    except BackendError:
+        return {}, None
+    return (data if isinstance(data, dict) else {}), sha
 
 
 def register(username: str, password: str, name: str = "", phone: str = "") -> None:
@@ -179,7 +213,7 @@ def register(username: str, password: str, name: str = "", phone: str = "") -> N
         data["users"].append({
             "username": username, "name": name, "phone": phone, "salt": salt, "hash": h,
             "role": "user", "status": "pending", "approved_notified": False,
-            "created_at": time.strftime("%Y-%m-%d %H:%M"),
+            "created_at": time.strftime("%Y-%m-%d %H:%M"), "pw_changed_at": _today_str(),
         })
     _commit_users(modify, f"register {username}")
 
@@ -244,18 +278,43 @@ def rename_user(old: str, new: str) -> None:
 
 
 def change_password(username: str, old_pw: str, new_pw: str) -> None:
-    """본인 비밀번호 변경(현재 비밀번호 확인 후). 관리자(고정)는 변경 불가."""
-    if (username or "").lower() == ADMIN_USERNAME.lower():
-        raise AuthError("관리자 비밀번호는 프로그램에 고정되어 변경할 수 없습니다.")
+    """본인 비밀번호 변경(현재 비밀번호 확인 후). 관리자도 변경 가능(admin.json 저장)."""
     if len(new_pw or "") < 4:
         raise AuthError("새 비밀번호는 4자 이상이어야 합니다.")
     salt, h = hash_password(new_pw)
+
+    # 관리자: admin.json 에 새 해시 저장(임베드 해시 대체)
+    if (username or "").lower() == ADMIN_USERNAME.lower():
+        if not backend_enabled():
+            raise AuthError("서버에 연결되어야 관리자 비밀번호를 변경할 수 있습니다.")
+        last = None
+        for _ in range(4):
+            ov, sha = _load_admin()
+            cur_salt = ov.get("salt") or ADMIN_SALT
+            cur_hash = ov.get("hash") or ADMIN_HASH
+            if not verify_password(old_pw, cur_salt, cur_hash):
+                raise AuthError("현재 비밀번호가 올바르지 않습니다.")
+            try:
+                _put_file(ADMIN_PATH,
+                          {"salt": salt, "hash": h, "pw_changed_at": _today_str()},
+                          sha, "admin chgpw")
+                return
+            except BackendError as e:
+                if "(409)" in str(e):
+                    last = e
+                    time.sleep(0.5)
+                    continue
+                raise
+        if last:
+            raise last
+        return
 
     def modify(data):
         u = _find(data["users"], username)
         if not u or not verify_password(old_pw, u.get("salt", ""), u.get("hash", "")):
             raise AuthError("현재 비밀번호가 올바르지 않습니다.")
         u["salt"], u["hash"] = salt, h
+        u["pw_changed_at"] = _today_str()
     _commit_users(modify, f"chgpw {username}")
 
 

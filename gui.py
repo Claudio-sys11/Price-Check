@@ -1543,6 +1543,8 @@ class App(tk.Tk):
             self._render_daily()
             if auth.get("notice"):   # 승인 후 첫 로그인 안내
                 self.after(200, lambda: pmsg.showinfo("가입 승인 완료", auth["notice"]))
+            if auth.get("pw_expired"):   # 30일 경과 → 비밀번호 변경 안내
+                self.after(450, self._pw_expired_prompt)
 
         def fail(msg):
             v_status.set(msg)
@@ -1719,6 +1721,13 @@ class App(tk.Tk):
         self._build_tabbar(admin=False)   # 관리자 탭 제거
         self.withdraw()
         self._show_login()
+
+    def _pw_expired_prompt(self) -> None:
+        """비밀번호 변경 후 30일 경과 안내 → 변경 팝업 열기."""
+        pmsg.showinfo("비밀번호 변경 안내",
+                      f"마지막 비밀번호 변경 후 {backend.PW_MAX_DAYS}일이 지났습니다.\n"
+                      "보안을 위해 비밀번호를 변경해 주세요.")
+        self._change_password()
 
     def _change_password(self) -> None:
         """비밀번호 변경 팝업(로그인/회원가입과 동일한 둥근 디자인)."""
@@ -3333,23 +3342,114 @@ class App(tk.Tk):
             on_select(v)
 
         def open_menu(_e=None):
-            # 네이티브 팝업 메뉴(클릭 선택이 확실히 동작) — 흰 배경 + 민트 하이라이트
-            menu = tk.Menu(self, tearoff=0, bg="white", fg=TEXT,
-                           activebackground=ACCENT, activeforeground="white",
-                           font=(FONT, 10), bd=0, relief="flat", activeborderwidth=0)
-            for val, lbl in options:
-                menu.add_command(label="  " + lbl + "  ",
-                                 command=lambda vv=val: choose(vv))
-            try:
-                menu.tk_popup(cv.winfo_rootx(), cv.winfo_rooty() + hh + sc(3))
-            finally:
-                menu.grab_release()
+            items = [(lbl, val) for val, lbl in options]
+            self._rounded_dropdown(cv, items, choose)
 
         cv.bind("<Button-1>", open_menu)
         cv.bind("<Enter>", lambda e: (st.update(hover=True), draw(), cv.configure(cursor="hand2")))
         cv.bind("<Leave>", lambda e: (st.update(hover=False), draw()))
         draw()
         return cv
+
+    def _rounded_dropdown(self, anchor, items, on_pick):
+        """둥근 드롭다운(세련된 디자인 + 안정적인 클릭 선택).
+
+        items: [(label, value)]. 항목 클릭(릴리스) 시 on_pick(value). 바깥 클릭/ESC 로 닫힘.
+        """
+        KEY = "#FF00FE"
+        row_h, pad = sc(32), sc(6)
+        fnt = tkfont.Font(family=FONT, size=10)
+        w = max(anchor.winfo_width(),
+                max((fnt.measure(l) for l, _ in items), default=sc(80)) + sc(40))
+        h = pad * 2 + row_h * len(items)
+        dd = tk.Toplevel(self)
+        dd.overrideredirect(True)
+        x = anchor.winfo_rootx()
+        y = anchor.winfo_rooty() + anchor.winfo_height() + sc(3)
+        if y + h > dd.winfo_screenheight() - sc(8):
+            y = anchor.winfo_rooty() - h - sc(3)
+        dd.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
+        bg = "white"
+        try:
+            dd.attributes("-topmost", True)
+            dd.attributes("-transparentcolor", KEY)
+            dd.configure(bg=KEY)
+            bg = KEY
+        except tk.TclError:
+            dd.configure(bg="white")
+        c = tk.Canvas(dd, width=w, height=h, bg=bg, highlightthickness=0, bd=0)
+        c.pack(fill="both", expand=True)
+        st = {"hover": -1, "closed": False, "bindid": None}
+
+        def bounds():
+            return [(i, pad + i * row_h, pad + (i + 1) * row_h) for i in range(len(items))]
+
+        def draw():
+            c.delete("all")
+            c.create_polygon(_round_rect_points(1, 1, w - 1, h - 1, sc(13)),
+                             fill="white", outline=BORDER, smooth=True)
+            for i, (lbl, _v) in enumerate(items):
+                y0 = pad + i * row_h
+                fg = TEXT
+                if i == st["hover"]:
+                    c.create_polygon(
+                        _round_rect_points(sc(5), y0 + sc(2), w - sc(5),
+                                           y0 + row_h - sc(2), sc(9)),
+                        fill="#eaf7f4", outline="", smooth=True)
+                    fg = ACCENT_ACTIVE
+                c.create_text(sc(16), y0 + row_h // 2, anchor="w", text=lbl,
+                              fill=fg, font=(FONT, 10))
+
+        def close():
+            if st["closed"]:
+                return
+            st["closed"] = True
+            if st["bindid"] is not None:
+                try:
+                    self.unbind("<Button-1>", st["bindid"])
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                dd.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+
+        def on_motion(e):
+            idx = -1
+            for i, a, b in bounds():
+                if a <= e.y <= b:
+                    idx = i
+                    break
+            if idx != st["hover"]:
+                st["hover"] = idx
+                c.configure(cursor="hand2" if idx >= 0 else "")
+                draw()
+
+        def on_release(e):
+            for i, a, b in bounds():
+                if a <= e.y <= b:
+                    val = items[i][1]
+                    close()
+                    on_pick(val)
+                    return
+
+        def outside(e):
+            wdg = e.widget   # dd(또는 그 자식) 클릭이면 닫지 않음
+            while wdg is not None:
+                if wdg is dd:
+                    return
+                wdg = getattr(wdg, "master", None)
+            close()
+
+        c.bind("<Motion>", on_motion)
+        c.bind("<Leave>", lambda e: (st.update(hover=-1), draw()))
+        c.bind("<ButtonRelease-1>", on_release)
+        dd.bind("<Escape>", lambda e: close())
+        draw()
+        dd.update_idletasks()
+        dd.lift()
+        st["bindid"] = self.bind("<Button-1>", outside, add="+")
+        return dd
 
     def _on_year_select(self, y) -> None:
         self._daily_year = y
