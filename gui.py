@@ -2567,11 +2567,15 @@ class App(tk.Tk):
                            fill=MUTED, font=(FONT, 10))
             return
 
-        mL, mR, mT, mB = sc(40), sc(16), sc(36), sc(34)
+        BAR_PASTEL = "#f6b0b0"   # 파스텔 빨강(막대)
+        LABEL_RED = "#c0504d"    # 수치/비율 라벨(가독성 있는 진한 파스텔 빨강)
+
+        mL, mR, mT, mB = sc(40), sc(16), sc(48), sc(34)
         plot_w = max(1, W - mL - mR)
         plot_h = max(1, H - mT - mB)
         base_y = H - mB
         vals = [int(h.get("diff", 0) or 0) for h in hist]
+        tots = [int(h.get("total", 0) or 0) for h in hist]
         maxv = max(vals + [1])
 
         # y축 눈금(0 / 중간 / 최대) + 옅은 그리드라인
@@ -2588,14 +2592,18 @@ class App(tk.Tk):
         lbl_step = max(1, (n + 11) // 12)   # 날짜 라벨 과밀 방지
         for i, h in enumerate(hist):
             v = vals[i]
+            pct = round(v * 100 / tots[i]) if tots[i] else 0
             xc = mL + slot * (i + 0.5)
             bh = plot_h * v / maxv
             top = base_y - bh
             cv.create_rectangle(xc - bar_w / 2, top, xc + bar_w / 2, base_y,
-                                fill=DIFF_FG, outline="")
-            if bar_w >= sc(14) or v == maxv:
-                cv.create_text(xc, top - sc(8), text=f"{v:,}",
-                               fill=DIFF_FG, font=(FONT, 8, "bold"))
+                                fill=BAR_PASTEL, outline="")
+            if bar_w >= sc(12) or v == maxv:
+                # 막대 위에 수치(굵게) + 비율(%)을 두 줄로 표시
+                cv.create_text(xc, top - sc(16), text=f"{v:,}",
+                               fill=LABEL_RED, font=(FONT, 8, "bold"))
+                cv.create_text(xc, top - sc(6), text=f"{pct}%",
+                               fill=LABEL_RED, font=(FONT, 7))
             if i % lbl_step == 0 or i == n - 1:
                 d = str(h.get("date", ""))[5:]   # MM-DD
                 cv.create_text(xc, base_y + sc(11), text=d,
