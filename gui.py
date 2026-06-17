@@ -1078,35 +1078,31 @@ class App(tk.Tk):
         self._build_menu()
         self._build_header()
 
-        # 알약형 탭 바 — 메인 2개는 좌측, '설치 현황'은 우측 상단에 절반 크기
-        self._tabbar = RoundedTabBar(
-            self,
-            [("inv", "재고현황 조회", {}),
-             ("cmp", "원가비교", {}),
-             ("daily", "일일현황", {}),
-             ("setup", "설치 현황",
-              {"side": "right", "height": 24, "font": (FONT, 9, "bold"),
-               "padx": 13, "radius": 12})],
-            self._switch_tab, bg=BG)
-        self._tabbar.pack(fill="x", padx=18, pady=(10, 4))
-
+        # 탭 컨테이너 + 프레임(사용자 관리는 관리자 로그인 시에만 탭바에 노출)
+        self._tabbar = None
         container = tk.Frame(self, bg=BG)
         container.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        self._tab_container = container
         self.tab_inv = tk.Frame(container, bg=BG)
         self.tab_cmp = tk.Frame(container, bg=BG)
         self.tab_daily = tk.Frame(container, bg=BG)
+        self.tab_useradmin = tk.Frame(container, bg=BG)
         self.tab_setup = tk.Frame(container, bg=BG)
-        for f in (self.tab_inv, self.tab_cmp, self.tab_daily, self.tab_setup):
+        for f in (self.tab_inv, self.tab_cmp, self.tab_daily,
+                  self.tab_useradmin, self.tab_setup):
             f.grid(row=0, column=0, sticky="nsew")
         container.rowconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
         self._tab_frames = {"inv": self.tab_inv, "cmp": self.tab_cmp,
-                            "daily": self.tab_daily, "setup": self.tab_setup}
+                            "daily": self.tab_daily, "useradmin": self.tab_useradmin,
+                            "setup": self.tab_setup}
 
         self._build_inventory_tab()
         self._build_compare_tab()
         self._build_daily_tab()
+        self._build_user_admin_tab()
         self._build_setup_tab()
+        self._build_tabbar(admin=False)   # 기본(비관리자) 탭바
         self._load_config()
 
         self._switch_tab("inv")   # 기본 탭
@@ -1114,12 +1110,35 @@ class App(tk.Tk):
         # 로딩 화면에서 최신 버전 확인 → 있으면 묻지 않고 즉시 자동 설치, 없으면 메인 표시
         self.after(80, self._splash_update_then_start)
 
+    def _build_tabbar(self, admin: bool) -> None:
+        """탭바(재)구성. 관리자면 '일일현황' 옆에 '사용자 관리' 탭을 추가한다."""
+        if getattr(self, "_tabbar", None) is not None:
+            try:
+                self._tabbar.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+        tabs = [("inv", "재고현황 조회", {}),
+                ("cmp", "원가비교", {}),
+                ("daily", "일일현황", {})]
+        if admin:
+            tabs.append(("useradmin", "사용자 관리", {}))
+        tabs.append(("setup", "설치 현황",
+                     {"side": "right", "height": 24, "font": (FONT, 9, "bold"),
+                      "padx": 13, "radius": 12}))
+        self._tabbar = RoundedTabBar(self, tabs, self._switch_tab, bg=BG)
+        self._tabbar.pack(fill="x", padx=18, pady=(10, 4), before=self._tab_container)
+        self._tabbar.select("inv")
+
     def _switch_tab(self, key: str) -> None:
+        if key == "useradmin" and (self._auth or {}).get("role") != "admin":
+            return
         frame = self._tab_frames.get(key)
         if frame is not None:
             frame.tkraise()
         if key == "daily":
             self._render_daily()
+        elif key == "useradmin":
+            self._render_user_admin()
 
     # ================= 디자인 테마 =================
     def _apply_theme(self) -> None:
@@ -1599,112 +1618,102 @@ class App(tk.Tk):
         entries[0].focus_set()
 
     def _apply_auth_role(self) -> None:
-        """로그인 사용자에 맞춰 제목/메뉴를 갱신(관리자면 사용자 관리 메뉴 추가)."""
+        """로그인 사용자에 맞춰 제목/탭을 갱신(관리자면 '사용자 관리' 탭 추가)."""
         a = self._auth or {}
         uname = a.get("username", "")
         role = a.get("role", "user")
         rolelbl = "관리자" if role == "admin" else "사용자"
         self.title(f"실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교  "
                    f"v{APP_VERSION}   [{uname} · {rolelbl}]")
-        if role == "admin" and not getattr(self, "_admin_menu_added", False):
-            mb = getattr(self, "_menubar", None)
-            if mb is not None:
-                admin_menu = tk.Menu(mb, tearoff=0, background="white", foreground=TEXT,
-                                     activebackground=ACCENT, activeforeground="white")
-                admin_menu.add_command(label="사용자 관리…", command=self._open_user_admin)
-                mb.add_cascade(label="관리자", menu=admin_menu)
-                self._admin_menu_added = True
+        self._build_tabbar(admin=(role == "admin"))
+        self._switch_tab("inv")
 
-    def _open_user_admin(self) -> None:
-        if (self._auth or {}).get("role") != "admin":
-            return
-        if not backend.backend_enabled():
-            pmsg.showwarning("사용자 관리 불가",
-                             "공유 서버가 설정되지 않아 사용자 관리를 사용할 수 없습니다(토큰 미설정).")
-            return
-        dlg = tk.Toplevel(self)
-        dlg.title("사용자 관리")
-        dlg.configure(bg=BG)
-        head = tk.Frame(dlg, bg=ACCENT, height=sc(48))
-        head.pack(fill="x"); head.pack_propagate(False)
-        tk.Label(head, text="사용자 관리 — 가입 승인 / 거절 / 삭제", bg=ACCENT, fg="white",
-                 font=(FONT, 12, "bold")).pack(side="left", padx=sc(18))
+    # ----- 탭: 사용자 관리(관리자 전용) -----
+    def _build_user_admin_tab(self) -> None:
+        root = self.tab_useradmin
+        ttk.Label(root, style="Muted.TLabel", justify="left",
+                  text="회원가입 신청을 승인·거절하거나 사용자를 삭제합니다. (관리자 전용)\n"
+                       "※ 목록에서 대상을 선택한 뒤 아래 버튼을 누르세요. 승인대기 사용자가 위에 표시됩니다."
+                  ).pack(fill="x", padx=16, pady=(12, 2))
+        btns = ttk.Frame(root)
+        btns.pack(fill="x", padx=16, pady=(2, 6))
+        accent_button(btns, "승인", lambda: self._useradmin_act("approve")).pack(side="left")
+        gray_button(btns, "거절", lambda: self._useradmin_act("reject")).pack(side="left", padx=6)
+        gray_button(btns, "삭제", lambda: self._useradmin_act("delete")).pack(side="left")
+        gray_button(btns, "새로고침", self._render_user_admin).pack(side="left", padx=6)
+        self.useradmin_status = tk.StringVar(value="")
+        ttk.Label(btns, textvariable=self.useradmin_status, style="Status.TLabel").pack(side="right")
 
-        body = tk.Frame(dlg, bg=BG)
-        body.pack(fill="both", expand=True, padx=sc(14), pady=sc(12))
+        tf = tk.Frame(root, bg=BORDER)
+        tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
         cols = ("username", "name", "status", "role", "created_at")
         heads = {"username": "아이디", "name": "이름", "status": "상태",
                  "role": "권한", "created_at": "가입일시"}
-        tf = tk.Frame(body, bg=BORDER)
-        tf.pack(fill="both", expand=True)
-        tree = ttk.Treeview(tf, show="headings", columns=cols, height=10)
+        self.tree_useradmin = ttk.Treeview(tf, show="headings", columns=cols)
         for c in cols:
-            tree.heading(c, text=heads[c])
-            tree.column(c, anchor="center",
-                        width=(sc(160) if c == "username" else sc(110)), stretch=True)
-        ysb = ttk.Scrollbar(tf, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=ysb.set)
-        tree.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
+            self.tree_useradmin.heading(c, text=heads[c])
+            self.tree_useradmin.column(c, anchor="center",
+                                       width=(sc(170) if c == "username" else sc(120)),
+                                       stretch=True)
+        ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_useradmin.yview)
+        self.tree_useradmin.configure(yscrollcommand=ysb.set)
+        self.tree_useradmin.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         ysb.grid(row=0, column=1, sticky="ns")
-        tf.rowconfigure(0, weight=1); tf.columnconfigure(0, weight=1)
+        tf.rowconfigure(0, weight=1)
+        tf.columnconfigure(0, weight=1)
 
-        v_status = tk.StringVar(value="")
-        tk.Label(body, textvariable=v_status, bg=BG, fg=MUTED, font=(FONT, 9)).pack(
-            anchor="w", pady=(8, 2))
-
+    def _render_user_admin(self) -> None:
+        if not hasattr(self, "tree_useradmin"):
+            return
+        if not backend.backend_enabled():
+            self.useradmin_status.set("공유 서버가 설정되지 않았습니다(토큰 미설정).")
+            return
+        self.useradmin_status.set("불러오는 중…")
         STAT = {"pending": "승인대기", "approved": "승인됨", "rejected": "거절됨"}
 
-        def refresh():
-            v_status.set("불러오는 중…")
-            def work():
-                try:
-                    users = backend.list_users()
-                    self.after(0, lambda: fill(users))
-                except Exception as e:   # noqa: BLE001
-                    self.after(0, lambda: v_status.set(f"오류: {e}"))
-            threading.Thread(target=work, daemon=True).start()
-
         def fill(users):
-            tree.delete(*tree.get_children())
+            self.tree_useradmin.delete(*self.tree_useradmin.get_children())
             users.sort(key=lambda u: (u.get("status") != "pending", u.get("username", "")))
             for u in users:
-                tree.insert("", "end", iid=u.get("username", ""), values=(
+                self.tree_useradmin.insert("", "end", iid=u.get("username", ""), values=(
                     u.get("username", ""), u.get("name", ""),
                     STAT.get(u.get("status"), u.get("status", "")),
                     "관리자" if u.get("role") == "admin" else "사용자",
                     u.get("created_at", "")))
             pend = sum(1 for u in users if u.get("status") == "pending")
-            v_status.set(f"총 {len(users)}명 · 승인대기 {pend}명")
+            self.useradmin_status.set(f"총 {len(users)}명 · 승인대기 {pend}명")
 
-        def selected():
-            sel = tree.selection()
-            return sel[0] if sel else None
+        def work():
+            try:
+                users = backend.list_users()
+                self.after(0, lambda: fill(users))
+            except Exception as e:   # noqa: BLE001
+                self.after(0, lambda: self.useradmin_status.set(f"오류: {e}"))
+        threading.Thread(target=work, daemon=True).start()
 
-        def act(fn, label):
-            uname = selected()
-            if not uname:
-                v_status.set("대상 사용자를 선택하세요.")
-                return
-            v_status.set(f"{label} 처리 중…")
-            def work():
-                try:
-                    fn(uname)
-                    self.after(0, refresh)
-                except Exception as e:   # noqa: BLE001
-                    self.after(0, lambda: v_status.set(f"오류: {e}"))
-            threading.Thread(target=work, daemon=True).start()
+    def _useradmin_act(self, action: str) -> None:
+        if not hasattr(self, "tree_useradmin"):
+            return
+        sel = self.tree_useradmin.selection()
+        if not sel:
+            self.useradmin_status.set("대상 사용자를 선택하세요.")
+            return
+        uname = sel[0]
+        labels = {"approve": "승인", "reject": "거절", "delete": "삭제"}
+        self.useradmin_status.set(f"{labels.get(action, action)} 처리 중…")
 
-        bar = tk.Frame(body, bg=BG)
-        bar.pack(fill="x", pady=(6, 0))
-        accent_button(bar, "승인", lambda: act(lambda u: backend.set_user_status(u, "approved"), "승인")).pack(side="left")
-        gray_button(bar, "거절", lambda: act(lambda u: backend.set_user_status(u, "rejected"), "거절")).pack(side="left", padx=6)
-        gray_button(bar, "삭제", lambda: act(backend.delete_user, "삭제")).pack(side="left")
-        gray_button(bar, "새로고침", refresh).pack(side="left", padx=6)
-        gray_button(bar, "닫기", dlg.destroy).pack(side="right")
-
-        self._center_window(dlg, sc(720), sc(440))
-        dlg.transient(self)
-        refresh()
+        def work():
+            try:
+                if action == "approve":
+                    backend.set_user_status(uname, "approved")
+                elif action == "reject":
+                    backend.set_user_status(uname, "rejected")
+                else:
+                    backend.delete_user(uname)
+                self.after(0, self._render_user_admin)
+            except Exception as e:   # noqa: BLE001
+                self.after(0, lambda: self.useradmin_status.set(f"오류: {e}"))
+        threading.Thread(target=work, daemon=True).start()
 
     # ================= 자동 업데이트 =================
     def _splash_update_then_start(self) -> None:
@@ -2074,9 +2083,10 @@ class App(tk.Tk):
 
         sh = self.sheet_cmp
         # 정렬 중인 열에는 ▲/▼ 표시(표시용 머리글 — 식별용 _cmp_headers 는 원래 이름 유지)
-        sc = getattr(self, "_cmp_sort_col", None)
+        # 주의: 지역변수명에 sc 사용 금지 — 모듈 함수 sc()(DPI 배율) 를 가려 열폭 계산이 깨진다.
+        sort_col = getattr(self, "_cmp_sort_col", None)
         arrow = " ▼" if getattr(self, "_cmp_sort_desc", False) else " ▲"
-        disp_headers = [(h + arrow) if h == sc else h for h in headers]
+        disp_headers = [(h + arrow) if h == sort_col else h for h in headers]
         sh.headers(disp_headers)
         sh.set_sheet_data(data, reset_col_positions=True, reset_row_positions=True, redraw=False)
         try:   # 모든 행 높이를 동일하게(세로 가운데 정렬 효과)
@@ -2114,7 +2124,7 @@ class App(tk.Tk):
             w = fnt_b.measure(str(h))
             for r in rows:
                 w = max(w, fnt.measure(str(r.get(h, ""))))
-            w = min(max(w + sc(30), sc(64)), sc(460))   # 여백 + 최소/최대 제한
+            w = min(max(w + sc(34), sc(64)), sc(520))   # 여백 + 최소/최대 제한
             try:
                 sh.column_width(column=ci, width=w, redraw=False)
             except Exception:  # noqa: BLE001
