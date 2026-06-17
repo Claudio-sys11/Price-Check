@@ -7,8 +7,8 @@
 
 #define MyAppId "8F3C2A91-7B4D-4E26-9A1F-EC0A17E5C001"
 #define MyAppName "실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교"
-#define MyShortcutName "Price Check"
-#define MyAppVersion "1.0.54"
+#define MyShortcutName "원가비교 프로그램"
+#define MyAppVersion "1.0.55"
 #define MyAppPublisher "THE FEEL KOREA CO.,LTD."
 #define MyAppExeName "EcountInventory.exe"
 
@@ -26,7 +26,7 @@ AppPublisher={#MyAppPublisher}
 AppCopyright=Copyright (C) THE FEEL KOREA CO.,LTD.
 DefaultDirName={autopf}\EcountInventory
 DefaultGroupName={#MyShortcutName}
-; 업그레이드 시에도 이전 그룹명을 재사용하지 않고 새 이름(Price Check)을 사용
+; 업그레이드 시에도 이전 그룹명을 재사용하지 않고 새 이름(원가비교 프로그램)을 사용
 UsePreviousGroup=no
 DisableProgramGroupPage=yes
 OutputDir=installer
