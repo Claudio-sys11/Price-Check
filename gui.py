@@ -3333,8 +3333,17 @@ class App(tk.Tk):
             on_select(v)
 
         def open_menu(_e=None):
-            items = [(lbl, (lambda vv=val: choose(vv))) for val, lbl in options]
-            PremiumMenu(self, items, cv.winfo_rootx(), cv.winfo_rooty() + hh + sc(3))
+            # 네이티브 팝업 메뉴(클릭 선택이 확실히 동작) — 흰 배경 + 민트 하이라이트
+            menu = tk.Menu(self, tearoff=0, bg="white", fg=TEXT,
+                           activebackground=ACCENT, activeforeground="white",
+                           font=(FONT, 10), bd=0, relief="flat", activeborderwidth=0)
+            for val, lbl in options:
+                menu.add_command(label="  " + lbl + "  ",
+                                 command=lambda vv=val: choose(vv))
+            try:
+                menu.tk_popup(cv.winfo_rootx(), cv.winfo_rooty() + hh + sc(3))
+            finally:
+                menu.grab_release()
 
         cv.bind("<Button-1>", open_menu)
         cv.bind("<Enter>", lambda e: (st.update(hover=True), draw(), cv.configure(cursor="hand2")))
