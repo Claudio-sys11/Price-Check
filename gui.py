@@ -1300,12 +1300,25 @@ class App(tk.Tk):
                 return (name, size, weight)
         return (FONT, size, weight)
 
+    def _script_font(self, size, weight="normal"):
+        """영문 필기체(스크립트) 글꼴 — Segoe Script 우선, 없으면 다른 스크립트체."""
+        try:
+            fams = set(tkfont.families())
+        except Exception:   # noqa: BLE001
+            fams = set()
+        for name in ("Segoe Script", "Lucida Handwriting", "Gabriola",
+                     "Brush Script MT", "Ink Free"):
+            if name in fams:
+                return (name, size, weight)
+        return (FONT, size, weight)
+
     def _show_login(self) -> None:
         KEY = "#FF00FE"   # 투명 처리 키 컬러(둥근 모서리)
+        INDIGO, INDIGO_DK = "#1E0A5C", "#160848"   # 브랜드 인디고(럭셔리 포인트)
         dlg = tk.Toplevel(self)
         dlg.overrideredirect(True)
         dlg.protocol("WM_DELETE_WINDOW", self.destroy)   # 로그인 안 하면 종료
-        w, h = sc(382), sc(352)
+        w, h = sc(366), sc(524)
         sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
         gx, gy = (sw - w) // 2, (sh - h) // 3
         dlg.geometry(f"{w}x{h}+{max(0, gx)}+{max(0, gy)}")
@@ -1320,32 +1333,45 @@ class App(tk.Tk):
 
         c = tk.Canvas(dlg, width=w, height=h, bg=cbg, highlightthickness=0, bd=0)
         c.pack(fill="both", expand=True)
-        m, rad = sc(6), sc(26)
+        m, rad = sc(7), sc(30)
+        # 흰 카드 + 얇은 헤어라인 외곽(고급)
         c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
-                         fill="white", outline="", smooth=True)
-        c.create_polygon(_round_rect_points(m, m, w - m, m + sc(6), sc(3)),
-                         fill=ACCENT, outline="", smooth=True)
-        # 좌측 아이콘
+                         fill="white", outline=HAIRLINE, width=1, smooth=True)
+        # 상단 가운데 골드 미세 악센트
+        c.create_polygon(
+            _round_rect_points(w // 2 - sc(24), sc(18), w // 2 + sc(24), sc(22), sc(2)),
+            fill=GOLD, outline="", smooth=True)
+
+        # 중앙 브랜드 로고
         try:
             ic = tk.PhotoImage(file=resource_path("assets/app_icon.png"))
-            f = max(1, round(ic.width() / sc(40)))
+            f = max(1, round(ic.width() / sc(46)))
             ic = ic.subsample(f, f)
         except tk.TclError:
             ic = None
-        self._login_icon = ic   # 가비지컬렉션 방지(참조 유지)
-        tx = sc(30)
+        self._login_icon = ic   # 참조 유지(가비지컬렉션 방지)
         if ic is not None:
-            c.create_image(sc(30) + ic.width() // 2, sc(56), image=ic)
-            tx = sc(30) + ic.width() + sc(12)
-        c.create_text(tx, sc(46), anchor="w", text="원가비교 프로그램",
-                      fill=INK, font=self._cursive_font(17))
-        c.create_text(tx, sc(68), anchor="w", text="로그인 후 이용할 수 있습니다",
-                      fill=MUTED, font=(FONT, 9))
-        c.create_line(sc(26), sc(86), w - sc(26), sc(86), fill=HAIRLINE)
-        cls = c.create_text(w - sc(28), sc(44), text="✕", fill="#9aa3a0", font=(FONT, 12))
+            c.create_image(w // 2, sc(64), image=ic)
+
+        # 필기체 워드마크 'Price Check' + 보조 명칭(2단계 작게) + 골드 짧은 구분선
+        c.create_text(w // 2, sc(120), text="Price Check", fill=INDIGO,
+                      font=self._script_font(26))
+        c.create_text(w // 2, sc(148), text="원가비교 프로그램",
+                      fill="#6b7280", font=(FONT, 11))
+        c.create_line(w // 2 - sc(28), sc(170), w // 2 + sc(28), sc(170),
+                      fill=GOLD, width=1)
+
+        # 하단 푸터(은은한 그레이)
+        c.create_text(w // 2, h - sc(36), text="THE FEEL KOREA CO.,LTD.",
+                      fill="#a3a8a6", font=(FONT, 8))
+        c.create_text(w // 2, h - sc(20), text="Created by Claudio Lim",
+                      fill="#bfc4c2", font=(FONT, 8))
+
+        # 닫기(종료)
+        cls = c.create_text(w - sc(26), sc(28), text="✕", fill="#c4cbc8", font=(FONT, 11))
         c.tag_bind(cls, "<Button-1>", lambda e: self.destroy())
         c.tag_bind(cls, "<Enter>", lambda e: c.itemconfig(cls, fill="#dc2626"))
-        c.tag_bind(cls, "<Leave>", lambda e: c.itemconfig(cls, fill="#9aa3a0"))
+        c.tag_bind(cls, "<Leave>", lambda e: c.itemconfig(cls, fill="#c4cbc8"))
 
         # 헤더 영역 드래그로 창 이동(테두리 없는 창)
         drag = {"x": 0, "y": 0}
@@ -1353,30 +1379,35 @@ class App(tk.Tk):
         c.bind("<B1-Motion>", lambda e: dlg.geometry(
             f"+{dlg.winfo_x() + e.x - drag['x']}+{dlg.winfo_y() + e.y - drag['y']}"))
 
+        # 입력 폼(중앙 정렬, 여백 넉넉)
         form = tk.Frame(dlg, bg="white")
-        form.place(x=sc(30), y=sc(94), width=w - sc(60), height=h - sc(108))
-        tk.Label(form, text="아이디", bg="white", fg=TEXT, font=(FONT, 10)).grid(
-            row=0, column=0, sticky="w", pady=(0, 2))
+        form.place(x=sc(36), y=sc(190), width=w - sc(72), height=h - sc(248))
+        form.columnconfigure(0, weight=1)
+        tk.Label(form, text="아이디", bg="white", fg="#9aa3a0",
+                 font=(FONT, 9)).grid(row=0, column=0, sticky="w", pady=(0, 2))
         v_user = tk.StringVar()
         e_user = ttk.Entry(form, textvariable=v_user)
-        e_user.grid(row=1, column=0, sticky="ew", ipady=sc(3))
-        tk.Label(form, text="비밀번호", bg="white", fg=TEXT, font=(FONT, 10)).grid(
-            row=2, column=0, sticky="w", pady=(10, 2))
+        e_user.grid(row=1, column=0, sticky="ew", ipady=sc(5))
+        tk.Label(form, text="비밀번호", bg="white", fg="#9aa3a0",
+                 font=(FONT, 9)).grid(row=2, column=0, sticky="w", pady=(12, 2))
         v_pw = tk.StringVar()
         e_pw = ttk.Entry(form, textvariable=v_pw, show="*")
-        e_pw.grid(row=3, column=0, sticky="ew", ipady=sc(3))
-        form.columnconfigure(0, weight=1)
+        e_pw.grid(row=3, column=0, sticky="ew", ipady=sc(5))
 
         v_status = tk.StringVar(value="")
         tk.Label(form, textvariable=v_status, bg="white", fg="#dc2626",
-                 font=(FONT, 9), wraplength=w - sc(70), justify="left").grid(
-                     row=4, column=0, sticky="w", pady=(10, 4))
+                 font=(FONT, 9), wraplength=w - sc(90), justify="left").grid(
+                     row=4, column=0, sticky="w", pady=(10, 2))
 
-        btnrow = tk.Frame(form, bg="white")
-        btnrow.grid(row=5, column=0, sticky="ew", pady=(4, 0))
-        btn_login = accent_button(btnrow, "로그인", lambda: do_login(), bg="white")
-        btn_login.pack(side="left")
-        gray_button(btnrow, "회원가입", lambda: self._show_register(dlg), bg="white").pack(side="left", padx=8)
+        btn_login = RoundedButton(form, "로그인", lambda: do_login(), bg="white",
+                                  fill=INDIGO, fill_active=INDIGO_DK,
+                                  fill_disabled="#b3aad4", fg="white",
+                                  fg_disabled="#e7e2f5", height=42, radius=21)
+        btn_login.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+        link = tk.Label(form, text="회원가입", bg="white", fg=INDIGO,
+                        font=(FONT, 9, "underline"), cursor="hand2")
+        link.grid(row=6, column=0, pady=(12, 0))
+        link.bind("<Button-1>", lambda e: self._show_register(dlg))
 
         def set_busy(b):
             v_status.set("로그인 중…" if b else v_status.get())
@@ -1438,38 +1469,95 @@ class App(tk.Tk):
                              "공유 서버가 아직 설정되지 않아 회원가입을 사용할 수 없습니다.\n"
                              "관리자(THEFEELKOREA)로 로그인하거나 관리자에게 문의하세요.")
             return
+        KEY = "#FF00FE"
+        INDIGO, INDIGO_DK = "#1E0A5C", "#160848"
         dlg = tk.Toplevel(self)
-        dlg.title("회원가입")
-        dlg.configure(bg=BG)
-        dlg.resizable(False, False)
-        body = tk.Frame(dlg, bg=BG)
-        body.pack(fill="both", expand=True, padx=sc(24), pady=sc(18))
-        tk.Label(body, text="회원가입 (관리자 승인 후 사용)", bg=BG, fg=TEXT,
-                 font=(FONT, 11, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        dlg.overrideredirect(True)
+        w, h = sc(384), sc(600)
+        sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+        gx, gy = (sw - w) // 2, (sh - h) // 4
+        dlg.geometry(f"{w}x{h}+{max(0, gx)}+{max(0, gy)}")
+        cbg = "white"
+        try:
+            dlg.attributes("-topmost", True)
+            dlg.attributes("-transparentcolor", KEY)
+            dlg.configure(bg=KEY)
+            cbg = KEY
+        except tk.TclError:
+            dlg.configure(bg="white")
+
+        c = tk.Canvas(dlg, width=w, height=h, bg=cbg, highlightthickness=0, bd=0)
+        c.pack(fill="both", expand=True)
+        m, rad = sc(7), sc(30)
+        c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
+                         fill="white", outline=HAIRLINE, width=1, smooth=True)
+        c.create_polygon(
+            _round_rect_points(w // 2 - sc(24), sc(18), w // 2 + sc(24), sc(22), sc(2)),
+            fill=GOLD, outline="", smooth=True)
+        try:
+            ic = tk.PhotoImage(file=resource_path("assets/app_icon.png"))
+            f = max(1, round(ic.width() / sc(40)))
+            ic = ic.subsample(f, f)
+        except tk.TclError:
+            ic = None
+        self._reg_icon = ic   # 참조 유지
+        if ic is not None:
+            c.create_image(w // 2, sc(56), image=ic)
+        c.create_text(w // 2, sc(104), text="Price Check", fill=INDIGO,
+                      font=self._script_font(22))
+        c.create_text(w // 2, sc(130), text="회원가입", fill="#6b7280", font=(FONT, 11))
+        c.create_line(w // 2 - sc(28), sc(150), w // 2 + sc(28), sc(150),
+                      fill=GOLD, width=1)
+        c.create_text(w // 2, h - sc(36), text="THE FEEL KOREA CO.,LTD.",
+                      fill="#a3a8a6", font=(FONT, 8))
+        c.create_text(w // 2, h - sc(20), text="Created by Claudio Lim",
+                      fill="#bfc4c2", font=(FONT, 8))
+
+        def close_reg():
+            try:
+                parent.grab_set()
+            except Exception:   # noqa: BLE001
+                pass
+            dlg.destroy()
+
+        cls = c.create_text(w - sc(26), sc(28), text="✕", fill="#c4cbc8", font=(FONT, 11))
+        c.tag_bind(cls, "<Button-1>", lambda e: close_reg())
+        c.tag_bind(cls, "<Enter>", lambda e: c.itemconfig(cls, fill="#dc2626"))
+        c.tag_bind(cls, "<Leave>", lambda e: c.itemconfig(cls, fill="#c4cbc8"))
+        drag = {"x": 0, "y": 0}
+        c.bind("<Button-1>", lambda e: drag.update(x=e.x, y=e.y))
+        c.bind("<B1-Motion>", lambda e: dlg.geometry(
+            f"+{dlg.winfo_x() + e.x - drag['x']}+{dlg.winfo_y() + e.y - drag['y']}"))
+
+        form = tk.Frame(dlg, bg="white")
+        form.place(x=sc(40), y=sc(166), width=w - sc(80), height=h - sc(220))
+        form.columnconfigure(0, weight=1)
         v_u = tk.StringVar(); v_name = tk.StringVar()
         v_p = tk.StringVar(); v_p2 = tk.StringVar()
-        rows = [("아이디 (3자 이상)", v_u, False),
-                ("사용자 이름", v_name, False),
-                ("비밀번호 (4자 이상)", v_p, True),
-                ("비밀번호 확인", v_p2, True)]
+        fields = [("아이디 (3자 이상)", v_u, False),
+                  ("사용자 이름", v_name, False),
+                  ("비밀번호 (4자 이상)", v_p, True),
+                  ("비밀번호 확인", v_p2, True)]
         entries = []
-        for i, (lbl, var, hide) in enumerate(rows):
-            tk.Label(body, text=lbl, bg=BG, fg=TEXT, font=(FONT, 10)).grid(
-                row=1 + i * 2, column=0, sticky="w", pady=(6, 2))
-            e = ttk.Entry(body, textvariable=var, width=28, show="*" if hide else "")
-            e.grid(row=2 + i * 2, column=0, sticky="ew", ipady=sc(3))
+        for i, (lbl, var, hide) in enumerate(fields):
+            tk.Label(form, text=lbl, bg="white", fg="#9aa3a0", font=(FONT, 9)).grid(
+                row=i * 2, column=0, sticky="w", pady=(0 if i == 0 else 8, 2))
+            e = ttk.Entry(form, textvariable=var, show="*" if hide else "")
+            e.grid(row=i * 2 + 1, column=0, sticky="ew", ipady=sc(4))
             entries.append(e)
-        body.columnconfigure(0, weight=1)
-        nrows = len(rows)
+
         v_status = tk.StringVar(value="")
-        tk.Label(body, textvariable=v_status, bg=BG, fg="#dc2626", font=(FONT, 9),
-                 wraplength=sc(280), justify="left").grid(
-                     row=1 + nrows * 2, column=0, sticky="w", pady=(10, 4))
-        btnrow = tk.Frame(body, bg=BG)
-        btnrow.grid(row=2 + nrows * 2, column=0, sticky="ew", pady=(2, 0))
-        btn = accent_button(btnrow, "가입 신청", lambda: submit())
-        btn.pack(side="left")
-        gray_button(btnrow, "닫기", dlg.destroy).pack(side="left", padx=8)
+        tk.Label(form, textvariable=v_status, bg="white", fg="#dc2626", font=(FONT, 9),
+                 wraplength=w - sc(96), justify="left").grid(
+                     row=8, column=0, sticky="w", pady=(8, 2))
+        btn = RoundedButton(form, "가입 신청", lambda: submit(), bg="white",
+                            fill=INDIGO, fill_active=INDIGO_DK, fill_disabled="#b3aad4",
+                            fg="white", fg_disabled="#e7e2f5", height=42, radius=21)
+        btn.grid(row=9, column=0, sticky="ew", pady=(6, 0))
+        link = tk.Label(form, text="닫기", bg="white", fg="#6b7280",
+                        font=(FONT, 9, "underline"), cursor="hand2")
+        link.grid(row=10, column=0, pady=(10, 0))
+        link.bind("<Button-1>", lambda e: close_reg())
 
         def submit():
             u, nm, p, p2 = (v_u.get().strip(), v_name.get().strip(),
@@ -1490,17 +1578,23 @@ class App(tk.Tk):
                     self.after(0, lambda: err(f"오류: {e}"))
 
             def done():
-                dlg.destroy()
+                close_reg()
                 pmsg.showinfo("가입 신청 완료",
                               "가입 신청이 접수되었습니다.\n관리자 승인 후 로그인할 수 있습니다.")
+                try:
+                    parent.grab_set()
+                except Exception:   # noqa: BLE001
+                    pass
 
             def err(msg):
                 v_status.set(msg)
                 btn.configure(state="normal")
             threading.Thread(target=work, daemon=True).start()
 
-        self._center_window(dlg, sc(340), sc(400))
-        dlg.transient(parent)
+        entries[-1].bind("<Return>", lambda e: submit())
+        dlg.lift()
+        dlg.focus_force()
+        dlg.after(350, lambda: dlg.winfo_exists() and dlg.attributes("-topmost", False))
         dlg.grab_set()
         entries[0].focus_set()
 
