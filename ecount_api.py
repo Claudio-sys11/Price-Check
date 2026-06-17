@@ -20,7 +20,8 @@ from __future__ import annotations
 import json
 import re
 import threading
-from queue import Empty, Queue
+import time
+from collections import deque
 from typing import Any
 
 import requests
@@ -201,15 +202,18 @@ class EcountClient:
 
     # ---- 5) 품목코드별 입고단가 조회 (품목등록 IN_PRICE, 개별 매칭) -------
     def get_prices(self, codes, progress=None, per_session: int = 2,
-                   should_stop=None, workers: int = 6) -> dict[str, float]:
+                   should_stop=None, workers: int = 4,
+                   max_attempts: int = 8) -> dict[str, float]:
         """품목코드 목록 각각에 대해 품목등록(GetBasicProductsList, PROD_CD 지정)의
         입고단가(IN_PRICE)를 조회해 {품목코드: 입고단가} 로 반환한다.
 
         EcountERP 제약:
           - PROD_CD 지정 조회는 한 세션당 약 2건만 허용되고 이후 HTTP 412(rate limit).
           - 재로그인(새 세션) 하면 제한이 리셋됨.
-        → per_session(기본 2)건씩 묶어 '새 세션 로그인 + 조회' 단위(배치)로 처리하되,
-          여러 워커(workers)가 각자 독립 세션으로 배치를 병렬 처리해 속도를 높인다.
+        속도+정확도 전략:
+          - per_session(기본 2)건씩 한 세션(새 로그인)으로 조회. 여러 워커가 병렬 처리.
+          - HTTP 200 응답만 '확정'으로 보고, 412/네트워크/로그인 실패한 코드는
+            재시도 큐로 되돌려(backoff) max_attempts 회까지 다시 시도 → 누락 최소화.
 
         progress(done, total) 콜백, should_stop() 가 True면 중단.
         """
@@ -222,57 +226,93 @@ class EcountClient:
             return result
 
         per_session = max(1, per_session)
-        batches = [uniq[i:i + per_session] for i in range(0, total, per_session)]
-        q: Queue = Queue()
-        for b in batches:
-            q.put(b)
         lock = threading.Lock()
-        done = [0]
+        pending = deque((c, 0) for c in uniq)   # (code, attempts)
+        resolved: set[str] = set()              # 확정(가격 확인 또는 포기) 코드
         stop = [False]
+        login_gate = threading.Lock()
+        last_login = [0.0]                       # 로그인 과부하 방지용 최소 간격
 
-        def _bump(n: int) -> None:
-            with lock:
-                done[0] += n
-                d = done[0]
+        def report() -> None:
             if progress:
+                with lock:
+                    d = len(resolved)
                 progress(d, total)
+
+        def take_batch():
+            with lock:
+                batch = []
+                while pending and len(batch) < per_session:
+                    batch.append(pending.popleft())
+                return batch
+
+        def requeue(items, give_up=False) -> None:
+            with lock:
+                for code, att in items:
+                    if give_up or att + 1 >= max_attempts:
+                        resolved.add(code)        # 더는 재시도 안 함(포기)
+                    else:
+                        pending.append((code, att + 1))
+
+        def throttled_login():
+            # 로그인 폭주를 막아 412/실패를 줄인다(워커 간 최소 0.06초 간격)
+            with login_gate:
+                gap = 0.06 - (time.monotonic() - last_login[0])
+                if gap > 0:
+                    time.sleep(gap)
+                last_login[0] = time.monotonic()
+            return self._login_fresh()
 
         def worker() -> None:
             while not stop[0]:
-                try:
-                    batch = q.get_nowait()
-                except Empty:
-                    return
-                if (should_stop and should_stop()):
+                with lock:
+                    if len(resolved) >= total:
+                        return
+                if should_stop and should_stop():
                     stop[0] = True
-                    _bump(len(batch))
+                    return
+                batch = take_batch()
+                if not batch:
+                    time.sleep(0.05)              # 다른 워커가 재큐할 수 있어 잠시 대기
                     continue
-                local: dict[str, float] = {}
                 try:
-                    sess, sid = self._login_fresh()
-                    url = (
-                        f"{self._base_url(with_zone=True)}"
-                        f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={sid}"
-                    )
-                    for code in batch:
-                        if should_stop and should_stop():
-                            break
-                        try:
-                            resp = sess.post(url, json={"PROD_CD": code}, timeout=30)
-                            if resp.status_code == 200:
-                                rows = ((resp.json().get("Data") or {}).get("Result")) or []
-                                if rows:
-                                    local[code] = _num(rows[0].get("IN_PRICE"))
-                        except (requests.RequestException, json.JSONDecodeError, ValueError):
-                            pass
-                except EcountApiError:
-                    local = {}   # 로그인 실패 배치는 건너뜀
-                if local:
-                    with lock:
-                        result.update(local)
-                _bump(len(batch))
+                    sess, sid = throttled_login()
+                except Exception:                 # noqa: BLE001
+                    requeue(batch)                # 로그인 실패 → 재시도
+                    time.sleep(0.4)
+                    report()
+                    continue
+                url = (
+                    f"{self._base_url(with_zone=True)}"
+                    f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={sid}"
+                )
+                failed = []
+                for code, att in batch:
+                    if should_stop and should_stop():
+                        stop[0] = True
+                        break
+                    ok = False
+                    try:
+                        resp = sess.post(url, json={"PROD_CD": code}, timeout=30)
+                        if resp.status_code == 200:
+                            rows = ((resp.json().get("Data") or {}).get("Result")) or []
+                            if rows:
+                                with lock:
+                                    result[code] = _num(rows[0].get("IN_PRICE"))
+                            ok = True             # 200 = 확정(가격 또는 가격 없음)
+                    except (requests.RequestException, json.JSONDecodeError, ValueError):
+                        pass
+                    if ok:
+                        with lock:
+                            resolved.add(code)
+                    else:
+                        failed.append((code, att))
+                if failed:
+                    requeue(failed)               # 412/오류 코드만 재시도
+                    time.sleep(0.15)              # 레이트리밋 완화
+                report()
 
-        n_workers = max(1, min(workers, len(batches)))
+        n_workers = max(1, min(workers, total))
         threads = [threading.Thread(target=worker, daemon=True) for _ in range(n_workers)]
         for t in threads:
             t.start()
