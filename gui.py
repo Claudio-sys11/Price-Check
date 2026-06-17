@@ -172,6 +172,27 @@ def save_price_cache(cache: dict) -> None:
         pass
 
 
+DAILY_STATUS_PATH = os.path.join(app_data_dir(), "daily_status.json")
+
+
+def load_daily_status() -> list:
+    """일일현황 이력(원가비교 대시보드 집계)을 일자 목록으로 반환."""
+    try:
+        with open(DAILY_STATUS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def save_daily_status(records: list) -> None:
+    try:
+        with open(DAILY_STATUS_PATH, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
 def _sort_key(value) -> tuple:
     """정렬 키: 숫자로 해석되면 숫자 기준, 아니면 문자 기준(콤마 제거)."""
     s = str(value).replace(",", "").strip()
@@ -1060,6 +1081,7 @@ class App(tk.Tk):
             self,
             [("inv", "재고현황 조회", {}),
              ("cmp", "원가비교", {}),
+             ("daily", "일일현황", {}),
              ("setup", "설치 현황",
               {"side": "right", "height": 24, "font": (FONT, 9, "bold"),
                "padx": 13, "radius": 12})],
@@ -1070,15 +1092,18 @@ class App(tk.Tk):
         container.pack(fill="both", expand=True, padx=14, pady=(0, 12))
         self.tab_inv = tk.Frame(container, bg=BG)
         self.tab_cmp = tk.Frame(container, bg=BG)
+        self.tab_daily = tk.Frame(container, bg=BG)
         self.tab_setup = tk.Frame(container, bg=BG)
-        for f in (self.tab_inv, self.tab_cmp, self.tab_setup):
+        for f in (self.tab_inv, self.tab_cmp, self.tab_daily, self.tab_setup):
             f.grid(row=0, column=0, sticky="nsew")
         container.rowconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
-        self._tab_frames = {"inv": self.tab_inv, "cmp": self.tab_cmp, "setup": self.tab_setup}
+        self._tab_frames = {"inv": self.tab_inv, "cmp": self.tab_cmp,
+                            "daily": self.tab_daily, "setup": self.tab_setup}
 
         self._build_inventory_tab()
         self._build_compare_tab()
+        self._build_daily_tab()
         self._build_setup_tab()
         self._load_config()
 
@@ -1091,6 +1116,8 @@ class App(tk.Tk):
         frame = self._tab_frames.get(key)
         if frame is not None:
             frame.tkraise()
+        if key == "daily":
+            self._render_daily()
 
     # ================= 디자인 테마 =================
     def _apply_theme(self) -> None:
@@ -1402,6 +1429,8 @@ class App(tk.Tk):
         self.btn_sub_csv = gray_button(btns, "소계/평균만 내보내기", self._export_subtotals)
         self.btn_sub_csv.configure(state="disabled")
         self.btn_sub_csv.pack(side="left")
+        self.btn_clear_cache = gray_button(btns, "🗑  캐시 비우기", self._clear_price_cache)
+        self.btn_clear_cache.pack(side="left", padx=8)
         self.status = tk.StringVar(value="대기 중")
         ttk.Label(btns, textvariable=self.status, style="Status.TLabel").pack(side="right")
 
@@ -1918,6 +1947,7 @@ class App(tk.Tk):
         self._compare_rows_all = cmp.build_cost_comparison(self._wiz_rows, ecount_data)
         self.btn_cmp_csv.configure(state="normal")
         self._mark_all_done()
+        self._record_daily_status()   # 오늘 날짜로 대시보드 집계 스냅샷 저장
         self._render_compare()   # 현재 필터(브랜드/모델명) 적용해 표시
 
     def _render_compare(self) -> None:
@@ -2426,6 +2456,100 @@ class App(tk.Tk):
             "총단가": d.get("총단가", ""),
         } for d in subs]
         export_rows_excel(rows, "소계평균.xlsx")
+
+    # ================= 탭: 일일현황 =================
+    def _record_daily_status(self) -> None:
+        """원가비교 완료 시 오늘 날짜로 대시보드 집계를 저장(같은 날은 최신으로 갱신)."""
+        rows = getattr(self, "_compare_rows_all", [])
+        if not rows:
+            return
+        total = len(rows)
+        rec = {
+            "date": time.strftime("%Y-%m-%d"),
+            "time": time.strftime("%H:%M"),
+            "total": total,
+            "diff": sum(1 for r in rows if r.get("_tag") == "diff"),
+            "nostock": sum(1 for r in rows if r.get("_tag") == "nostock"),
+            "unmatched": sum(1 for r in rows if r.get("_tag") == "unmatched"),
+            "same": sum(1 for r in rows if r.get("_tag") == "same"),
+        }
+        hist = [h for h in load_daily_status() if h.get("date") != rec["date"]]
+        hist.append(rec)
+        hist.sort(key=lambda h: h.get("date", ""))
+        save_daily_status(hist)
+        if hasattr(self, "tree_daily"):
+            self._render_daily()
+
+    def _build_daily_tab(self) -> None:
+        root = self.tab_daily
+        ttk.Label(root, style="Muted.TLabel", justify="left",
+                  text="원가비교를 실행할 때마다 그날의 대시보드 집계(전체·원가차이·미입고·미매칭·원가일치)가 "
+                       "자동 저장되어 일자별 추이를 확인할 수 있습니다.\n"
+                       "※ 같은 날 여러 번 비교하면 가장 최근 결과로 갱신됩니다. 괄호 안은 전체 대비 비율(%)입니다."
+                  ).pack(fill="x", padx=16, pady=(12, 2))
+
+        btns = ttk.Frame(root)
+        btns.pack(fill="x", padx=16, pady=(2, 6))
+        self.btn_daily_refresh = accent_button(btns, "↻  새로고침", self._render_daily)
+        self.btn_daily_refresh.pack(side="left")
+        self.btn_daily_csv = gray_button(btns, "Excel 내보내기", self._export_daily)
+        self.btn_daily_csv.pack(side="left", padx=8)
+        self.daily_status = tk.StringVar(value="")
+        ttk.Label(btns, textvariable=self.daily_status, style="Status.TLabel").pack(side="right")
+
+        tf = tk.Frame(root, bg=BORDER)
+        tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
+        cols = ("date", "time", "total", "diff", "nostock", "unmatched", "same")
+        heads = {"date": "일자", "time": "갱신시각", "total": "전체",
+                 "diff": "원가차이", "nostock": "미입고",
+                 "unmatched": "미매칭", "same": "원가일치"}
+        self.tree_daily = ttk.Treeview(tf, show="headings", columns=cols)
+        for c in cols:
+            self.tree_daily.heading(c, text=heads[c])
+            self.tree_daily.column(
+                c, anchor=("w" if c == "date" else "center"),
+                width=(sc(130) if c == "date" else sc(108)), stretch=True)
+        ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_daily.yview)
+        self.tree_daily.configure(yscrollcommand=ysb.set)
+        self.tree_daily.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
+        ysb.grid(row=0, column=1, sticky="ns")
+        tf.rowconfigure(0, weight=1)
+        tf.columnconfigure(0, weight=1)
+        self._enable_tree_copy(self.tree_daily, self.daily_status)
+
+    def _render_daily(self) -> None:
+        if not hasattr(self, "tree_daily"):
+            return
+        hist = load_daily_status()
+        hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")), reverse=True)
+        self.tree_daily.delete(*self.tree_daily.get_children())
+
+        def cell(n, total):
+            return f"{n:,} ({round(n * 100 / total)}%)" if total else f"{n:,}"
+
+        for h in hist:
+            t = h.get("total", 0)
+            self.tree_daily.insert("", "end", values=(
+                h.get("date", ""), h.get("time", ""), f"{t:,}",
+                cell(h.get("diff", 0), t), cell(h.get("nostock", 0), t),
+                cell(h.get("unmatched", 0), t), cell(h.get("same", 0), t)))
+        self.daily_status.set(
+            f"총 {len(hist)}일치 기록" if hist
+            else "기록 없음 — 원가비교를 실행하면 자동 저장됩니다.")
+
+    def _export_daily(self) -> None:
+        hist = load_daily_status()
+        if not hist:
+            pmsg.showwarning("데이터 없음", "내보낼 일일현황 기록이 없습니다.")
+            return
+        hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")), reverse=True)
+        rows = [{
+            "일자": h.get("date", ""), "갱신시각": h.get("time", ""),
+            "전체": h.get("total", 0), "원가차이": h.get("diff", 0),
+            "미입고": h.get("nostock", 0), "미매칭": h.get("unmatched", 0),
+            "원가일치": h.get("same", 0),
+        } for h in hist]
+        export_rows_excel(rows, "일일현황.xlsx")
 
     def _prices_updated(self, rows: list[dict], new_all: list[dict], n_fetched: int) -> None:
         """백그라운드 입고단가 매칭 완료 → 전체 데이터 교체 후 현재 필터/정렬로 재표시."""
