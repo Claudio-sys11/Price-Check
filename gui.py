@@ -1465,6 +1465,8 @@ class App(tk.Tk):
             self.deiconify()
             self.lift()
             self._render_daily()
+            if auth.get("notice"):   # 승인 후 첫 로그인 안내
+                self.after(200, lambda: pmsg.showinfo("가입 승인 완료", auth["notice"]))
 
         def fail(msg):
             v_status.set(msg)
@@ -1492,9 +1494,9 @@ class App(tk.Tk):
         INDIGO, INDIGO_DK = "#1E0A5C", "#160848"
         dlg = tk.Toplevel(self)
         dlg.overrideredirect(True)
-        w, h = sc(384), sc(600)
+        w, h = sc(384), sc(652)
         sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
-        gx, gy = (sw - w) // 2, (sh - h) // 4
+        gx, gy = (sw - w) // 2, (sh - h) // 5
         dlg.geometry(f"{w}x{h}+{max(0, gx)}+{max(0, gy)}")
         cbg = "white"
         try:
@@ -1551,10 +1553,11 @@ class App(tk.Tk):
         form = tk.Frame(dlg, bg="white")
         form.place(x=sc(40), y=sc(166), width=w - sc(80), height=h - sc(220))
         form.columnconfigure(0, weight=1)
-        v_u = tk.StringVar(); v_name = tk.StringVar()
+        v_u = tk.StringVar(); v_name = tk.StringVar(); v_phone = tk.StringVar()
         v_p = tk.StringVar(); v_p2 = tk.StringVar()
         fields = [("아이디 (3자 이상)", v_u, False),
                   ("사용자 이름", v_name, False),
+                  ("휴대폰 번호", v_phone, False),
                   ("비밀번호 (4자 이상)", v_p, True),
                   ("비밀번호 확인", v_p2, True)]
         entries = []
@@ -1565,22 +1568,23 @@ class App(tk.Tk):
             e.grid(row=i * 2 + 1, column=0, sticky="ew", ipady=sc(4))
             entries.append(e)
 
+        nf = len(fields)
         v_status = tk.StringVar(value="")
         tk.Label(form, textvariable=v_status, bg="white", fg="#dc2626", font=(FONT, 9),
                  wraplength=w - sc(96), justify="left").grid(
-                     row=8, column=0, sticky="w", pady=(8, 2))
+                     row=nf * 2, column=0, sticky="w", pady=(8, 2))
         btn = RoundedButton(form, "가입 신청", lambda: submit(), bg="white",
                             fill=INDIGO, fill_active=INDIGO_DK, fill_disabled="#b3aad4",
                             fg="white", fg_disabled="#e7e2f5", height=42, radius=21)
-        btn.grid(row=9, column=0, sticky="ew", pady=(6, 0))
+        btn.grid(row=nf * 2 + 1, column=0, sticky="ew", pady=(6, 0))
         link = tk.Label(form, text="닫기", bg="white", fg="#6b7280",
                         font=(FONT, 9, "underline"), cursor="hand2")
-        link.grid(row=10, column=0, pady=(10, 0))
+        link.grid(row=nf * 2 + 2, column=0, pady=(10, 0))
         link.bind("<Button-1>", lambda e: close_reg())
 
         def submit():
-            u, nm, p, p2 = (v_u.get().strip(), v_name.get().strip(),
-                            v_p.get(), v_p2.get())
+            u, nm, ph, p, p2 = (v_u.get().strip(), v_name.get().strip(),
+                                v_phone.get().strip(), v_p.get(), v_p2.get())
             if p != p2:
                 v_status.set("비밀번호가 일치하지 않습니다.")
                 return
@@ -1589,7 +1593,7 @@ class App(tk.Tk):
 
             def work():
                 try:
-                    backend.register(u, p, nm)
+                    backend.register(u, p, nm, ph)
                     self.after(0, done)
                 except (backend.AuthError, backend.BackendError) as e:
                     self.after(0, lambda: err(str(e)))
@@ -1638,22 +1642,23 @@ class App(tk.Tk):
         btns = ttk.Frame(root)
         btns.pack(fill="x", padx=16, pady=(2, 6))
         accent_button(btns, "승인", lambda: self._useradmin_act("approve")).pack(side="left")
-        gray_button(btns, "거절", lambda: self._useradmin_act("reject")).pack(side="left", padx=6)
-        gray_button(btns, "삭제", lambda: self._useradmin_act("delete")).pack(side="left")
-        gray_button(btns, "새로고침", self._render_user_admin).pack(side="left", padx=6)
+        gray_button(btns, "ID 수정", self._useradmin_rename).pack(side="left", padx=6)
+        gray_button(btns, "거절", lambda: self._useradmin_act("reject")).pack(side="left")
+        gray_button(btns, "삭제", lambda: self._useradmin_act("delete")).pack(side="left", padx=6)
+        gray_button(btns, "새로고침", self._render_user_admin).pack(side="left")
         self.useradmin_status = tk.StringVar(value="")
         ttk.Label(btns, textvariable=self.useradmin_status, style="Status.TLabel").pack(side="right")
 
         tf = tk.Frame(root, bg=BORDER)
         tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
-        cols = ("username", "name", "status", "role", "created_at")
-        heads = {"username": "아이디", "name": "이름", "status": "상태",
-                 "role": "권한", "created_at": "가입일시"}
+        cols = ("username", "name", "phone", "status", "role", "created_at")
+        heads = {"username": "아이디", "name": "이름", "phone": "휴대폰",
+                 "status": "상태", "role": "권한", "created_at": "가입일시"}
         self.tree_useradmin = ttk.Treeview(tf, show="headings", columns=cols)
         for c in cols:
             self.tree_useradmin.heading(c, text=heads[c])
             self.tree_useradmin.column(c, anchor="center",
-                                       width=(sc(170) if c == "username" else sc(120)),
+                                       width=(sc(150) if c == "username" else sc(118)),
                                        stretch=True)
         ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_useradmin.yview)
         self.tree_useradmin.configure(yscrollcommand=ysb.set)
@@ -1676,7 +1681,7 @@ class App(tk.Tk):
             users.sort(key=lambda u: (u.get("status") != "pending", u.get("username", "")))
             for u in users:
                 self.tree_useradmin.insert("", "end", iid=u.get("username", ""), values=(
-                    u.get("username", ""), u.get("name", ""),
+                    u.get("username", ""), u.get("name", ""), u.get("phone", ""),
                     STAT.get(u.get("status"), u.get("status", "")),
                     "관리자" if u.get("role") == "admin" else "사용자",
                     u.get("created_at", "")))
@@ -1714,6 +1719,59 @@ class App(tk.Tk):
             except Exception as e:   # noqa: BLE001
                 self.after(0, lambda: self.useradmin_status.set(f"오류: {e}"))
         threading.Thread(target=work, daemon=True).start()
+
+    def _useradmin_rename(self) -> None:
+        """선택한 사용자의 아이디(ID)를 수정한다(승인 전 ID 변경 가능)."""
+        if not hasattr(self, "tree_useradmin"):
+            return
+        sel = self.tree_useradmin.selection()
+        if not sel:
+            self.useradmin_status.set("대상 사용자를 선택하세요.")
+            return
+        old = sel[0]
+        new = self._ask_text("ID 수정", f"'{old}' 의 새 아이디를 입력하세요.", old)
+        if not new or new == old:
+            return
+        self.useradmin_status.set("ID 수정 중…")
+
+        def work():
+            try:
+                backend.rename_user(old, new)
+                self.after(0, self._render_user_admin)
+            except Exception as e:   # noqa: BLE001
+                self.after(0, lambda: self.useradmin_status.set(f"오류: {e}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _ask_text(self, title: str, prompt: str, initial: str = ""):
+        """간단한 텍스트 입력 모달. 확인 시 입력값(strip), 취소 시 None 반환."""
+        win = tk.Toplevel(self)
+        win.title(title)
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        result = {"v": None}
+        tk.Label(win, text=prompt, bg=BG, fg=TEXT, font=(FONT, 10)).pack(
+            padx=sc(20), pady=(sc(16), sc(6)), anchor="w")
+        var = tk.StringVar(value=initial)
+        ent = ttk.Entry(win, textvariable=var, width=30)
+        ent.pack(padx=sc(20), fill="x")
+        ent.focus_set()
+        ent.selection_range(0, "end")
+        bar = tk.Frame(win, bg=BG)
+        bar.pack(fill="x", padx=sc(20), pady=sc(14))
+
+        def ok():
+            result["v"] = var.get().strip()
+            win.destroy()
+
+        accent_button(bar, "확인", ok, bg=BG).pack(side="right")
+        gray_button(bar, "취소", win.destroy, bg=BG).pack(side="right", padx=(0, 8))
+        ent.bind("<Return>", lambda e: ok())
+        win.bind("<Escape>", lambda e: win.destroy())
+        self._center_window(win, sc(330), sc(160))
+        win.transient(self)
+        win.grab_set()
+        self.wait_window(win)
+        return result["v"]
 
     # ================= 자동 업데이트 =================
     def _splash_update_then_start(self) -> None:

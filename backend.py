@@ -133,7 +133,7 @@ def authenticate(username: str, password: str) -> dict:
         if verify_password(password, ADMIN_SALT, ADMIN_HASH):
             return {"username": ADMIN_USERNAME, "role": "admin", "status": "approved"}
         raise AuthError("비밀번호가 올바르지 않습니다.")
-    data, _ = _load_users()
+    data, sha = _load_users()
     u = _find(data["users"], username)
     if not u or not verify_password(password, u.get("salt", ""), u.get("hash", "")):
         raise AuthError("아이디 또는 비밀번호가 올바르지 않습니다.")
@@ -142,17 +142,31 @@ def authenticate(username: str, password: str) -> dict:
         raise AuthError("관리자 승인 대기 중입니다. 승인 후 로그인할 수 있습니다.")
     if st == "rejected":
         raise AuthError("가입이 거절되었습니다. 관리자에게 문의하세요.")
-    return {"username": u["username"], "role": u.get("role", "user"), "status": st}
+    # 승인 후 첫 로그인 시 1회 안내 메시지(approved_notified 플래그)
+    notice = ""
+    if st == "approved" and not u.get("approved_notified"):
+        u["approved_notified"] = True
+        try:
+            _put_file(USERS_PATH, data, sha, f"notify {username}")
+        except BackendError:
+            pass
+        notice = ("관리자 승인이 완료되었습니다. 가입을 환영합니다!\n"
+                  "이제 모든 기능을 사용할 수 있습니다.")
+    return {"username": u["username"], "name": u.get("name", ""),
+            "role": u.get("role", "user"), "status": st, "notice": notice}
 
 
-def register(username: str, password: str, name: str = "") -> None:
+def register(username: str, password: str, name: str = "", phone: str = "") -> None:
     """회원가입 — status='pending'으로 등록(관리자 승인 필요)."""
     username = (username or "").strip()
     name = (name or "").strip()
+    phone = (phone or "").strip()
     if len(username) < 3:
         raise AuthError("아이디는 3자 이상이어야 합니다.")
     if not name:
         raise AuthError("사용자 이름을 입력하세요.")
+    if not phone:
+        raise AuthError("휴대폰 번호를 입력하세요.")
     if len(password) < 4:
         raise AuthError("비밀번호는 4자 이상이어야 합니다.")
     if username.lower() == ADMIN_USERNAME.lower():
@@ -162,8 +176,8 @@ def register(username: str, password: str, name: str = "") -> None:
         raise AuthError("이미 존재하는 아이디입니다.")
     salt, h = hash_password(password)
     data["users"].append({
-        "username": username, "name": name, "salt": salt, "hash": h,
-        "role": "user", "status": "pending",
+        "username": username, "name": name, "phone": phone, "salt": salt, "hash": h,
+        "role": "user", "status": "pending", "approved_notified": False,
         "created_at": time.strftime("%Y-%m-%d %H:%M"),
     })
     _put_file(USERS_PATH, data, sha, f"register {username}")
@@ -185,7 +199,26 @@ def set_user_status(username: str, status: str) -> None:
     if not u:
         raise AuthError("사용자를 찾을 수 없습니다.")
     u["status"] = status
+    if status == "approved":
+        u["approved_notified"] = False   # 승인 시 다음 로그인에서 안내
     _put_file(USERS_PATH, data, sha, f"{status} {username}")
+
+
+def rename_user(old: str, new: str) -> None:
+    """관리자: 사용자 아이디(ID) 변경."""
+    new = (new or "").strip()
+    if len(new) < 3:
+        raise AuthError("아이디는 3자 이상이어야 합니다.")
+    if new.lower() == ADMIN_USERNAME.lower():
+        raise AuthError("사용할 수 없는 아이디입니다.")
+    data, sha = _load_users()
+    u = _find(data["users"], old)
+    if not u:
+        raise AuthError("사용자를 찾을 수 없습니다.")
+    if (old or "").strip().lower() != new.lower() and _find(data["users"], new):
+        raise AuthError("이미 존재하는 아이디입니다.")
+    u["username"] = new
+    _put_file(USERS_PATH, data, sha, f"rename {old} -> {new}")
 
 
 def delete_user(username: str) -> None:
