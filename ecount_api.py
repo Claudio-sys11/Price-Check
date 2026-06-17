@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+from queue import Empty, Queue
 from typing import Any
 
 import requests
@@ -181,17 +183,33 @@ class EcountClient:
             )
         return data
 
+    def _login_fresh(self) -> "tuple[requests.Session, str]":
+        """워커용: 독립 세션으로 로그인해 (session, session_id) 반환(공유 상태 미변경)."""
+        sess = requests.Session()
+        url = f"{self._base_url(with_zone=True)}/OAPI/V2/OAPILogin"
+        payload = {
+            "COM_CODE": self.com_code, "USER_ID": self.user_id,
+            "API_CERT_KEY": self.api_cert_key, "LAN_TYPE": self.lan_type, "ZONE": self.zone,
+        }
+        resp = sess.post(url, json=payload, timeout=self.timeout)
+        if resp.status_code != 200:
+            raise EcountApiError(f"HTTP {resp.status_code}")
+        sid = ((resp.json().get("Data") or {}).get("Datas") or {}).get("SESSION_ID")
+        if not sid:
+            raise EcountApiError("로그인 실패(SESSION_ID 없음)")
+        return sess, sid
+
     # ---- 5) 품목코드별 입고단가 조회 (품목등록 IN_PRICE, 개별 매칭) -------
     def get_prices(self, codes, progress=None, per_session: int = 2,
-                   should_stop=None) -> dict[str, float]:
+                   should_stop=None, workers: int = 6) -> dict[str, float]:
         """품목코드 목록 각각에 대해 품목등록(GetBasicProductsList, PROD_CD 지정)의
         입고단가(IN_PRICE)를 조회해 {품목코드: 입고단가} 로 반환한다.
 
         EcountERP 제약:
-          - 빈 조건 조회는 첫 10000건만 주고 페이지네이션이 없어 재고 품목을 못 덮음.
           - PROD_CD 지정 조회는 한 세션당 약 2건만 허용되고 이후 HTTP 412(rate limit).
           - 재로그인(새 세션) 하면 제한이 리셋됨.
-        → per_session(기본 2)건마다 새 세션으로 재로그인하며 순차 조회한다.
+        → per_session(기본 2)건씩 묶어 '새 세션 로그인 + 조회' 단위(배치)로 처리하되,
+          여러 워커(workers)가 각자 독립 세션으로 배치를 병렬 처리해 속도를 높인다.
 
         progress(done, total) 콜백, should_stop() 가 True면 중단.
         """
@@ -200,39 +218,66 @@ class EcountClient:
         uniq = list(dict.fromkeys(str(c).strip() for c in codes if str(c).strip()))
         total = len(uniq)
         result: dict[str, float] = {}
-        done = 0
+        if total == 0:
+            return result
 
-        for i in range(0, total, per_session):
-            if should_stop and should_stop():
-                break
-            batch = uniq[i:i + per_session]
-            # 새 세션으로 재로그인(세션당 호출 제한 리셋)
-            self._session = requests.Session()
-            self.session_id = None
-            try:
-                self.login()
-            except EcountApiError:
-                # 로그인 일시 실패 시 이 배치는 건너뛰고 계속
-                done += len(batch)
-                if progress:
-                    progress(done, total)
-                continue
-            url = (
-                f"{self._base_url(with_zone=True)}"
-                f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={self.session_id}"
-            )
-            for code in batch:
+        per_session = max(1, per_session)
+        batches = [uniq[i:i + per_session] for i in range(0, total, per_session)]
+        q: Queue = Queue()
+        for b in batches:
+            q.put(b)
+        lock = threading.Lock()
+        done = [0]
+        stop = [False]
+
+        def _bump(n: int) -> None:
+            with lock:
+                done[0] += n
+                d = done[0]
+            if progress:
+                progress(d, total)
+
+        def worker() -> None:
+            while not stop[0]:
                 try:
-                    resp = self._session.post(url, json={"PROD_CD": code}, timeout=30)
-                    if resp.status_code == 200:
-                        rows = ((resp.json().get("Data") or {}).get("Result")) or []
-                        if rows:
-                            result[code] = _num(rows[0].get("IN_PRICE"))
-                except (requests.RequestException, json.JSONDecodeError, ValueError):
-                    pass
-                done += 1
-                if progress:
-                    progress(done, total)
+                    batch = q.get_nowait()
+                except Empty:
+                    return
+                if (should_stop and should_stop()):
+                    stop[0] = True
+                    _bump(len(batch))
+                    continue
+                local: dict[str, float] = {}
+                try:
+                    sess, sid = self._login_fresh()
+                    url = (
+                        f"{self._base_url(with_zone=True)}"
+                        f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={sid}"
+                    )
+                    for code in batch:
+                        if should_stop and should_stop():
+                            break
+                        try:
+                            resp = sess.post(url, json={"PROD_CD": code}, timeout=30)
+                            if resp.status_code == 200:
+                                rows = ((resp.json().get("Data") or {}).get("Result")) or []
+                                if rows:
+                                    local[code] = _num(rows[0].get("IN_PRICE"))
+                        except (requests.RequestException, json.JSONDecodeError, ValueError):
+                            pass
+                except EcountApiError:
+                    local = {}   # 로그인 실패 배치는 건너뜀
+                if local:
+                    with lock:
+                        result.update(local)
+                _bump(len(batch))
+
+        n_workers = max(1, min(workers, len(batches)))
+        threads = [threading.Thread(target=worker, daemon=True) for _ in range(n_workers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
         return result
 
     @staticmethod
