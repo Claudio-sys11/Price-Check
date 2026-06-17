@@ -3002,6 +3002,13 @@ class App(tk.Tk):
         self.btn_daily_refresh.pack(side="left")
         self.btn_daily_csv = gray_button(btns, "Excel 내보내기", self._export_daily)
         self.btn_daily_csv.pack(side="left", padx=8)
+        # 원가차이 추이 보기 전환(일별 / 월별)
+        self._daily_chart_mode = "day"
+        ttk.Label(btns, text="추이:", style="Muted.TLabel").pack(side="left", padx=(16, 4))
+        self.btn_chart_day = gray_button(btns, "일별", lambda: self._set_chart_mode("day"))
+        self.btn_chart_day.pack(side="left")
+        self.btn_chart_month = gray_button(btns, "월별", lambda: self._set_chart_mode("month"))
+        self.btn_chart_month.pack(side="left", padx=6)
         self.daily_status = tk.StringVar(value="")
         ttk.Label(btns, textvariable=self.daily_status, style="Status.TLabel").pack(side="right")
 
@@ -3032,6 +3039,7 @@ class App(tk.Tk):
         tf.rowconfigure(0, weight=1)
         tf.columnconfigure(0, weight=1)
         self._enable_tree_copy(self.tree_daily, self.daily_status)
+        self._set_chart_mode("day")   # 기본 일별 + 버튼 강조
 
     def _render_daily(self) -> None:
         if not hasattr(self, "tree_daily"):
@@ -3071,8 +3079,51 @@ class App(tk.Tk):
             else "기록 없음 — 원가비교를 실행하면 자동 저장됩니다.")
         self._draw_diff_chart()
 
+    def _set_chart_mode(self, mode: str) -> None:
+        """원가차이 추이 보기 전환(day/month) + 버튼 강조 + 그래프 갱신."""
+        self._daily_chart_mode = mode
+        for btn, m in ((getattr(self, "btn_chart_day", None), "day"),
+                       (getattr(self, "btn_chart_month", None), "month")):
+            if btn is None:
+                continue
+            if m == mode:
+                btn._fill, btn._fill_active, btn._fg = ACCENT, ACCENT_ACTIVE, "white"
+            else:
+                btn._fill, btn._fill_active, btn._fg = BTN_GRAY, BTN_GRAY_ACTIVE, BTN_GRAY_FG
+            try:
+                btn._draw()
+            except Exception:  # noqa: BLE001
+                pass
+        self._draw_diff_chart()
+
+    def _daily_series(self) -> list:
+        """현재 모드에 맞춘 [{label, value, pct}] 시리즈(과거→현재)."""
+        cache = getattr(self, "_daily_cache", [])
+        if getattr(self, "_daily_chart_mode", "day") == "month":
+            by: dict = {}
+            for h in cache:
+                ym = str(h.get("date", ""))[:7]   # YYYY-MM
+                if ym:
+                    by.setdefault(ym, []).append(h)
+            series = []
+            for ym in sorted(by)[-12:]:
+                recs = by[ym]
+                ad = sum(int(r.get("diff", 0) or 0) for r in recs) / len(recs)
+                at = sum(int(r.get("total", 0) or 0) for r in recs) / len(recs)
+                series.append({"label": ym[2:], "value": round(ad),
+                               "pct": round(ad * 100 / at) if at else 0})   # YY-MM, 월평균
+            return series
+        recs = sorted(cache, key=lambda h: (h.get("date", ""), h.get("time", "")))[-24:]
+        out = []
+        for r in recs:
+            v = int(r.get("diff", 0) or 0)
+            t = int(r.get("total", 0) or 0)
+            out.append({"label": str(r.get("date", ""))[5:], "value": v,
+                        "pct": round(v * 100 / t) if t else 0})
+        return out
+
     def _draw_diff_chart(self) -> None:
-        """일자별 '원가차이' 수치를 막대그래프로 그린다(과거→현재, 최근 24일)."""
+        """'원가차이' 막대그래프 — 막대 위에 수치(비율%)을 한 줄로 표시. 일별/월별 지원."""
         cv = getattr(self, "daily_chart", None)
         if cv is None:
             return
@@ -3081,29 +3132,25 @@ class App(tk.Tk):
         H = cv.winfo_height()
         if W < 60 or H < 60:
             return
-        cv.create_text(sc(14), sc(13), text="원가차이 추이",
+        is_month = getattr(self, "_daily_chart_mode", "day") == "month"
+        cv.create_text(sc(14), sc(13),
+                       text=("원가차이 추이 (월별)" if is_month else "원가차이 추이 (일별)"),
                        anchor="w", fill=TEXT, font=(FONT, 11, "bold"))
 
-        hist = sorted(getattr(self, "_daily_cache", []),
-                      key=lambda h: (h.get("date", ""), h.get("time", "")))
-        hist = hist[-24:]
-        if not hist:
+        series = self._daily_series()
+        if not series:
             cv.create_text(W // 2, H // 2, text="기록 없음 — 원가비교를 실행하면 그래프가 표시됩니다.",
                            fill=MUTED, font=(FONT, 10))
             return
 
         BAR_PASTEL = "#f6b0b0"   # 파스텔 빨강(막대)
-        LABEL_RED = "#c0504d"    # 수치/비율 라벨(가독성 있는 진한 파스텔 빨강)
-
-        mL, mR, mT, mB = sc(40), sc(16), sc(48), sc(34)
+        LABEL_RED = "#c0504d"    # 수치/비율 라벨
+        mL, mR, mT, mB = sc(40), sc(16), sc(40), sc(34)
         plot_w = max(1, W - mL - mR)
         plot_h = max(1, H - mT - mB)
         base_y = H - mB
-        vals = [int(h.get("diff", 0) or 0) for h in hist]
-        tots = [int(h.get("total", 0) or 0) for h in hist]
-        maxv = max(vals + [1])
+        maxv = max([s["value"] for s in series] + [1])
 
-        # y축 눈금(0 / 중간 / 최대) + 옅은 그리드라인
         for frac in (0.0, 0.5, 1.0):
             y = base_y - plot_h * frac
             cv.create_line(mL, y, W - mR, y,
@@ -3111,27 +3158,26 @@ class App(tk.Tk):
             cv.create_text(mL - sc(6), y, text=f"{round(maxv * frac):,}",
                            anchor="e", fill=MUTED, font=(FONT, 8))
 
-        n = len(hist)
+        n = len(series)
         slot = plot_w / n
-        bar_w = min(slot * 0.62, sc(34))
-        lbl_step = max(1, (n + 11) // 12)   # 날짜 라벨 과밀 방지
-        for i, h in enumerate(hist):
-            v = vals[i]
-            pct = round(v * 100 / tots[i]) if tots[i] else 0
+        bar_w = min(slot * 0.6, sc(40))
+        lbl_step = max(1, (n + 11) // 12)
+        fnt_lbl = tkfont.Font(family=FONT, size=8, weight="bold")
+        for i, s in enumerate(series):
+            v, pct = s["value"], s["pct"]
             xc = mL + slot * (i + 0.5)
-            bh = plot_h * v / maxv
-            top = base_y - bh
+            top = base_y - plot_h * v / maxv
             cv.create_rectangle(xc - bar_w / 2, top, xc + bar_w / 2, base_y,
                                 fill=BAR_PASTEL, outline="")
-            if bar_w >= sc(12) or v == maxv:
-                # 막대 위에 수치(굵게) + 비율(%)을 두 줄로 표시
-                cv.create_text(xc, top - sc(16), text=f"{v:,}",
+            label = f"{v:,} ({pct}%)"           # 수치와 비율을 한 줄(좌우)로
+            if fnt_lbl.measure(label) <= slot or v == maxv:
+                cv.create_text(xc, top - sc(8), text=label,
                                fill=LABEL_RED, font=(FONT, 8, "bold"))
-                cv.create_text(xc, top - sc(6), text=f"{pct}%",
-                               fill=LABEL_RED, font=(FONT, 7))
+            elif bar_w >= sc(12):
+                cv.create_text(xc, top - sc(8), text=f"{v:,}",
+                               fill=LABEL_RED, font=(FONT, 8, "bold"))
             if i % lbl_step == 0 or i == n - 1:
-                d = str(h.get("date", ""))[5:]   # MM-DD
-                cv.create_text(xc, base_y + sc(11), text=d,
+                cv.create_text(xc, base_y + sc(11), text=s["label"],
                                fill=MUTED, font=(FONT, 8))
 
     def _export_daily(self) -> None:
