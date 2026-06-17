@@ -1230,9 +1230,29 @@ class App(tk.Tk):
         tw = tkfont.Font(family=FONT, size=15, weight="bold").measure(title)
         c.create_text(sc(38) + tw + sc(14), h // 2 + 1, anchor="w", text=f"v{APP_VERSION}",
                       fill=GOLD_SOFT, font=(FONT, 10))
-        c.create_text(w - sc(20), h // 2, anchor="e",
-                      text="설정 ▸ 인증 정보에서 API 키를 입력하세요",
-                      fill=ACCENT_SOFT, font=(FONT, 9))
+        if self._auth:   # 로그인 상태: 사용자 표시 + 로그아웃 버튼
+            disp = self._display_user(self._auth.get("username", ""))
+            role = "관리자" if self._auth.get("role") == "admin" else "사용자"
+            pw_, ph_ = sc(80), sc(28)
+            px2 = w - sc(18)
+            px1 = px2 - pw_
+            py1, py2 = h // 2 - ph_ // 2, h // 2 + ph_ // 2
+            pill = c.create_polygon(_round_rect_points(px1, py1, px2, py2, sc(14)),
+                                    fill="white", outline="", smooth=True)
+            txt = c.create_text((px1 + px2) // 2, h // 2, text="로그아웃",
+                                fill=HEADER_DARK, font=(FONT, 9, "bold"))
+            for it in (pill, txt):
+                c.tag_bind(it, "<Button-1>", lambda e: self._logout())
+                c.tag_bind(it, "<Enter>", lambda e: (c.itemconfig(pill, fill="#eafff9"),
+                                                     c.configure(cursor="hand2")))
+                c.tag_bind(it, "<Leave>", lambda e: (c.itemconfig(pill, fill="white"),
+                                                     c.configure(cursor="")))
+            c.create_text(px1 - sc(12), h // 2, anchor="e",
+                          text=f"{disp} · {role}", fill=ACCENT_SOFT, font=(FONT, 9))
+        else:
+            c.create_text(w - sc(20), h // 2, anchor="e",
+                          text="설정 ▸ 인증 정보에서 API 키를 입력하세요",
+                          fill=ACCENT_SOFT, font=(FONT, 9))
 
     # ================= 상단 메뉴 / 설정 =================
     def _build_menu(self) -> None:
@@ -1682,6 +1702,18 @@ class App(tk.Tk):
                    f"v{APP_VERSION}   [{uname} · {rolelbl}]")
         self._build_tabbar(admin=(role == "admin"))
         self._switch_tab("inv")
+        self._draw_header()   # 헤더에 사용자/로그아웃 표시
+
+    def _logout(self) -> None:
+        """로그아웃 → 메인 숨기고 로그인 팝업을 다시 띄운다."""
+        self._auth = None
+        try:
+            self._draw_header()
+        except Exception:  # noqa: BLE001
+            pass
+        self._build_tabbar(admin=False)   # 관리자 탭 제거
+        self.withdraw()
+        self._show_login()
 
     # ----- 탭: 사용자 관리(관리자 전용) -----
     def _build_user_admin_tab(self) -> None:
@@ -3062,20 +3094,16 @@ class App(tk.Tk):
         self.btn_chart_day.pack(side="left")
         self.btn_chart_month = gray_button(btns, "월별", lambda: self._set_chart_mode("month"))
         self.btn_chart_month.pack(side="left", padx=6)
-        # 년도(2026~3개년) / 월(전체·1~12월) 선택
+        # 년도(2026~3개년) / 월(전체·1~12월) — 둥근 셀렉트(세련된 디자인)
         self._daily_year, self._daily_month = 2026, 0
-        ttk.Label(btns, text="년도:", style="Muted.TLabel").pack(side="left", padx=(16, 4))
-        self.cmb_year = ttk.Combobox(btns, width=7, state="readonly",
-                                     values=["2026년", "2027년", "2028년"])
-        self.cmb_year.set("2026년")
-        self.cmb_year.pack(side="left")
-        self.cmb_year.bind("<<ComboboxSelected>>", self._on_daily_period_change)
-        ttk.Label(btns, text="월:", style="Muted.TLabel").pack(side="left", padx=(10, 4))
-        self.cmb_month = ttk.Combobox(btns, width=6, state="readonly",
-                                      values=["전체"] + [f"{i}월" for i in range(1, 13)])
-        self.cmb_month.set("전체")
-        self.cmb_month.pack(side="left")
-        self.cmb_month.bind("<<ComboboxSelected>>", self._on_daily_period_change)
+        ttk.Label(btns, text="년도", style="Muted.TLabel").pack(side="left", padx=(16, 5))
+        self._rounded_select(
+            btns, [(y, f"{y}년") for y in (2026, 2027, 2028)], 2026,
+            self._on_year_select).pack(side="left")
+        ttk.Label(btns, text="월", style="Muted.TLabel").pack(side="left", padx=(12, 5))
+        self._rounded_select(
+            btns, [(0, "전체")] + [(i, f"{i}월") for i in range(1, 13)], 0,
+            self._on_month_select).pack(side="left")
         self.daily_status = tk.StringVar(value="")
         ttk.Label(btns, textvariable=self.daily_status, style="Status.TLabel").pack(side="right")
 
@@ -3150,13 +3178,51 @@ class App(tk.Tk):
             out.append(r)
         return out
 
-    def _on_daily_period_change(self, event=None) -> None:
-        try:
-            self._daily_year = int(self.cmb_year.get().replace("년", ""))
-        except (ValueError, AttributeError):
-            self._daily_year = 2026
-        mtxt = self.cmb_month.get()
-        self._daily_month = 0 if mtxt == "전체" else int(mtxt.replace("월", ""))
+    def _rounded_select(self, parent, options, current, on_select, width=None):
+        """둥근 모서리 셀렉트(드롭다운) — 클릭 시 PremiumMenu 로 옵션 표시.
+
+        options: [(value, label), ...]
+        """
+        labels = dict(options)
+        fnt = tkfont.Font(family=FONT, size=10)
+        maxw = max((fnt.measure(lbl) for _, lbl in options), default=sc(60))
+        w = width or (maxw + sc(42))
+        hh, rad = sc(28), sc(13)
+        cv = tk.Canvas(parent, bg=BG, highlightthickness=0, bd=0, width=w, height=hh)
+        st = {"value": current, "hover": False}
+
+        def draw():
+            cv.delete("all")
+            cv.create_polygon(_round_rect_points(1, 1, w - 1, hh - 1, rad),
+                              fill="white",
+                              outline=(ACCENT if st["hover"] else BORDER), smooth=True)
+            cv.create_text(sc(12), hh // 2, anchor="w",
+                           text=labels.get(st["value"], str(st["value"])),
+                           fill=TEXT, font=(FONT, 10))
+            cv.create_text(w - sc(11), hh // 2, anchor="e", text="▾",
+                           fill=ACCENT_ACTIVE, font=(FONT, 9, "bold"))
+
+        def choose(v):
+            st["value"] = v
+            draw()
+            on_select(v)
+
+        def open_menu(_e=None):
+            items = [(lbl, (lambda vv=val: choose(vv))) for val, lbl in options]
+            PremiumMenu(self, items, cv.winfo_rootx(), cv.winfo_rooty() + hh + sc(3))
+
+        cv.bind("<Button-1>", open_menu)
+        cv.bind("<Enter>", lambda e: (st.update(hover=True), draw(), cv.configure(cursor="hand2")))
+        cv.bind("<Leave>", lambda e: (st.update(hover=False), draw()))
+        draw()
+        return cv
+
+    def _on_year_select(self, y) -> None:
+        self._daily_year = y
+        self._refresh_daily_view()
+
+    def _on_month_select(self, m) -> None:
+        self._daily_month = m
         self._refresh_daily_view()
 
     def _refresh_daily_view(self) -> None:
