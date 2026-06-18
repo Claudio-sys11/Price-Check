@@ -2464,11 +2464,12 @@ class App(tk.Tk):
             items = [
                 ("이 셀 복사", lambda: self._copy_cell(tree)),
                 ("선택 행 복사", lambda: self._copy_rows(tree)),
-                ("-", None),
                 ("전체 복사 (머리글 포함)",
                  lambda: self._copy_rows(tree, all_rows=True, header=True)),
             ]
-            PremiumMenu(self, items, e.x_root, e.y_root)
+            # 검증된 둥근 드롭다운을 커서 위치에 띄움(클릭 즉시 동작)
+            self._rounded_dropdown(None, items, lambda cmd: cmd(),
+                                   at=(e.x_root, e.y_root))
 
         # 드래그 선택(누른 행 → 끌어간 행 범위 선택)
         def on_press(e):
@@ -3416,23 +3417,31 @@ class App(tk.Tk):
         draw()
         return cv
 
-    def _rounded_dropdown(self, anchor, items, on_pick):
+    def _rounded_dropdown(self, anchor, items, on_pick, at=None):
         """둥근 드롭다운(세련된 디자인 + 안정적인 클릭 선택).
 
         items: [(label, value)]. 항목 클릭(릴리스) 시 on_pick(value). 바깥 클릭/ESC 로 닫힘.
+        anchor 아래에 펼치며, at=(x_root, y_root) 가 주어지면 그 위치에 띄운다(우클릭 메뉴).
         """
         KEY = "#FF00FE"
         row_h, pad = sc(32), sc(6)
         fnt = tkfont.Font(family=FONT, size=10)
-        w = max(anchor.winfo_width(),
+        base_w = anchor.winfo_width() if anchor is not None else 0
+        w = max(base_w,
                 max((fnt.measure(l) for l, _ in items), default=sc(80)) + sc(40))
         h = pad * 2 + row_h * len(items)
         dd = tk.Toplevel(self)
         dd.overrideredirect(True)
-        x = anchor.winfo_rootx()
-        y = anchor.winfo_rooty() + anchor.winfo_height() + sc(3)
-        if y + h > dd.winfo_screenheight() - sc(8):
-            y = anchor.winfo_rooty() - h - sc(3)
+        sw, sh = dd.winfo_screenwidth(), dd.winfo_screenheight()
+        if at is not None:
+            x, y = int(at[0]), int(at[1])
+        else:
+            x = anchor.winfo_rootx()
+            y = anchor.winfo_rooty() + anchor.winfo_height() + sc(3)
+        if y + h > sh - sc(8):                       # 화면 아래로 넘치면 위로
+            y = (anchor.winfo_rooty() - h - sc(3)) if anchor is not None else (y - h)
+        if x + w > sw - sc(8):                       # 화면 오른쪽 넘치면 왼쪽으로
+            x = sw - w - sc(8)
         dd.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
         bg = "white"
         try:
