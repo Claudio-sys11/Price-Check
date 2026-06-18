@@ -20,6 +20,8 @@ output/
 config.json
 # 공유 백엔드 토큰·관리자 해시 (exe에만 내장, 공개 소스엔 미포함)
 _secret.py
+# PyInstaller 버전 정보(빌드 시 자동 생성)
+version_info.txt
 
 # 업체 데이터(가격·상품) — 공개 저장소 노출 방지
 data/wizfasta_products.json
