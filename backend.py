@@ -143,7 +143,7 @@ def authenticate(username: str, password: str) -> dict:
     username = (username or "").strip()
     if not username or not password:
         raise AuthError("아이디와 비밀번호를 입력하세요.")
-    # 관리자 — 변경분(admin.json)이 있으면 그것으로, 없으면 임베드 해시로 검증
+    # 관리자 — 변경분(admin.json)이 있으면 그것으로, 없으면 임베드 해시로 검증(잠금 없음)
     if username.lower() == ADMIN_USERNAME.lower():
         ov, _sha = _load_admin()
         a_salt = ov.get("salt") or ADMIN_SALT
@@ -151,32 +151,64 @@ def authenticate(username: str, password: str) -> dict:
         if not verify_password(password, a_salt, a_hash):
             raise AuthError("비밀번호가 올바르지 않습니다.")
         days = _days_since(ov.get("pw_changed_at")) if ov.get("pw_changed_at") else None
-        return {"username": ADMIN_USERNAME, "name": "임정수", "role": "admin",
+        return {"username": ADMIN_USERNAME, "name": ov.get("name") or "임정수",
+                "phone": ov.get("phone", ""), "role": "admin",
                 "status": "approved", "notice": "",
                 "pw_days": days, "pw_expired": bool(days is not None and days >= PW_MAX_DAYS)}
     data, sha = _load_users()
     u = _find(data["users"], username)
-    if not u or not verify_password(password, u.get("salt", ""), u.get("hash", "")):
+    if not u:
         raise AuthError("아이디 또는 비밀번호가 올바르지 않습니다.")
+    if u.get("locked"):
+        raise AuthError("LOCKED:비밀번호 5회 오류로 계정이 잠겼습니다.\n"
+                        "관리자에게 잠금 해제를 요청하세요.")
+    if not verify_password(password, u.get("salt", ""), u.get("hash", "")):
+        # 실패 횟수 증가 → 5회면 잠금
+        fc = int(u.get("failed", 0) or 0) + 1
+        locked = fc >= 5
+
+        def _fail(d):
+            uu = _find(d["users"], username)
+            if uu:
+                uu["failed"] = fc
+                if locked:
+                    uu["locked"] = True
+        try:
+            _commit_users(_fail, f"fail {username}")
+        except Exception:   # noqa: BLE001
+            pass
+        if locked:
+            raise AuthError("LOCKED:비밀번호를 5회 틀려 계정이 잠겼습니다.\n"
+                            "관리자에게 잠금 해제를 요청하세요.")
+        raise AuthError(f"비밀번호가 올바르지 않습니다. (실패 {fc}/5)")
     st = u.get("status", "pending")
     if st == "pending":
         raise AuthError("관리자 승인 대기 중입니다. 승인 후 로그인할 수 있습니다.")
     if st == "rejected":
         raise AuthError("가입이 거절되었습니다. 관리자에게 문의하세요.")
-    # 승인 후 첫 로그인 시 1회 안내 메시지(approved_notified 플래그)
-    notice = ""
-    if st == "approved" and not u.get("approved_notified"):
-        u["approved_notified"] = True
-        try:
-            _put_file(USERS_PATH, data, sha, f"notify {username}")
-        except BackendError:
-            pass
-        notice = ("관리자 승인이 완료되었습니다. 가입을 환영합니다!\n"
-                  "이제 모든 기능을 사용할 수 있습니다.")
+    # 로그인 성공 → 마지막 접속 기록 + 실패 초기화 + (최초 승인 안내) 1회 쓰기
+    need_notice = (st == "approved" and not u.get("approved_notified"))
+    notice = ("관리자 승인이 완료되었습니다. 가입을 환영합니다!\n"
+              "이제 모든 기능을 사용할 수 있습니다." if need_notice else "")
+    now_str = time.strftime("%Y-%m-%d %H:%M")
+
+    def _success(d):
+        uu = _find(d["users"], username)
+        if uu:
+            uu["last_login"] = now_str
+            uu["failed"] = 0
+            if need_notice:
+                uu["approved_notified"] = True
+    try:
+        _commit_users(_success, f"login {username}")
+    except Exception:   # noqa: BLE001
+        pass
     days = _days_since(u.get("pw_changed_at") or u.get("created_at"))
     return {"username": u["username"], "name": u.get("name", ""),
-            "role": u.get("role", "user"), "status": st, "notice": notice,
-            "pw_days": days, "pw_expired": bool(days is not None and days >= PW_MAX_DAYS)}
+            "phone": u.get("phone", ""), "role": u.get("role", "user"),
+            "status": st, "notice": notice,
+            "pw_days": days, "pw_expired": bool(days is not None and days >= PW_MAX_DAYS),
+            "pw_must_change": bool(u.get("must_change"))}
 
 
 def _load_admin():
@@ -315,7 +347,87 @@ def change_password(username: str, old_pw: str, new_pw: str) -> None:
             raise AuthError("현재 비밀번호가 올바르지 않습니다.")
         u["salt"], u["hash"] = salt, h
         u["pw_changed_at"] = _today_str()
+        u["must_change"] = False
     _commit_users(modify, f"chgpw {username}")
+
+
+RESET_PW = "000000"
+
+
+def reset_password(username: str) -> None:
+    """관리자: 사용자 비밀번호를 000000 으로 초기화(+잠금/실패 해제, 다음 로그인 시 변경 유도)."""
+    if (username or "").lower() == ADMIN_USERNAME.lower():
+        raise AuthError("관리자 계정은 이 기능으로 초기화할 수 없습니다.")
+    salt, h = hash_password(RESET_PW)
+
+    def modify(d):
+        u = _find(d["users"], username)
+        if not u:
+            raise AuthError("사용자를 찾을 수 없습니다.")
+        u["salt"], u["hash"] = salt, h
+        u["failed"] = 0
+        u["locked"] = False
+        u["unlock_requested"] = False
+        u["must_change"] = True
+        u["pw_changed_at"] = _today_str()
+    _commit_users(modify, f"reset-pw {username}")
+
+
+def unlock_user(username: str) -> None:
+    """관리자: 잠긴 사용자 계정 잠금 해제(실패 횟수·요청 초기화)."""
+    def modify(d):
+        u = _find(d["users"], username)
+        if not u:
+            raise AuthError("사용자를 찾을 수 없습니다.")
+        u["locked"] = False
+        u["failed"] = 0
+        u["unlock_requested"] = False
+    _commit_users(modify, f"unlock {username}")
+
+
+def request_unlock(username: str) -> None:
+    """잠긴 사용자가 관리자에게 잠금 해제를 요청(unlock_requested 플래그)."""
+    def modify(d):
+        u = _find(d["users"], username)
+        if not u:
+            raise AuthError("존재하지 않는 아이디입니다.")
+        if not u.get("locked"):
+            raise AuthError("잠긴 계정이 아닙니다.")
+        u["unlock_requested"] = True
+    _commit_users(modify, f"unlock-req {username}")
+
+
+def update_info(username: str, name: str, phone: str) -> None:
+    """이름/휴대폰 정보 변경(관리자는 admin.json, 일반 사용자는 users.json)."""
+    name = (name or "").strip()
+    phone = (phone or "").strip()
+    if not name:
+        raise AuthError("이름을 입력하세요.")
+    if (username or "").lower() == ADMIN_USERNAME.lower():
+        if not backend_enabled():
+            raise AuthError("서버에 연결되어야 정보를 변경할 수 있습니다.")
+        for _ in range(4):
+            ov, sha = _load_admin()
+            ov = dict(ov)
+            ov["name"] = name
+            ov["phone"] = phone
+            try:
+                _put_file(ADMIN_PATH, ov, sha, "admin info")
+                return
+            except BackendError as e:
+                if "(409)" in str(e):
+                    time.sleep(0.5)
+                    continue
+                raise
+        return
+
+    def modify(d):
+        u = _find(d["users"], username)
+        if not u:
+            raise AuthError("사용자를 찾을 수 없습니다.")
+        u["name"] = name
+        u["phone"] = phone
+    _commit_users(modify, f"info {username}")
 
 
 def delete_user(username: str) -> None:

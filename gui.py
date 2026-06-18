@@ -1230,8 +1230,9 @@ class App(tk.Tk):
         tw = tkfont.Font(family=FONT, size=15, weight="bold").measure(title)
         c.create_text(sc(38) + tw + sc(14), h // 2 + 1, anchor="w", text=f"v{APP_VERSION}",
                       fill=GOLD_SOFT, font=(FONT, 10))
-        if self._auth:   # 로그인 상태: 사용자 표시 + 비밀번호 변경 / 로그아웃 버튼
-            disp = self._display_user(self._auth.get("username", ""))
+        if self._auth:   # 로그인 상태: 사용자 표시 + 정보/비밀번호 변경 / 로그아웃 버튼
+            disp = (self._auth.get("name")
+                    or self._display_user(self._auth.get("username", "")))
             role = "관리자" if self._auth.get("role") == "admin" else "사용자"
             ph_ = sc(28)
             py1, py2 = h // 2 - ph_ // 2, h // 2 + ph_ // 2
@@ -1252,7 +1253,8 @@ class App(tk.Tk):
 
             lo_x1 = _pill(w - sc(18), sc(80), "로그아웃", self._logout)
             pc_x1 = _pill(lo_x1 - sc(8), sc(102), "비밀번호 변경", self._change_password)
-            c.create_text(pc_x1 - sc(12), h // 2, anchor="e",
+            info_x1 = _pill(pc_x1 - sc(8), sc(90), "정보 변경", self._change_info)
+            c.create_text(info_x1 - sc(12), h // 2, anchor="e",
                           text=f"{disp} · {role}", fill=ACCENT_SOFT, font=(FONT, 9))
         else:
             c.create_text(w - sc(20), h // 2, anchor="e",
@@ -1543,15 +1545,32 @@ class App(tk.Tk):
             self._render_daily()
             if auth.get("notice"):   # 승인 후 첫 로그인 안내
                 self.after(200, lambda: pmsg.showinfo("가입 승인 완료", auth["notice"]))
-            if auth.get("pw_expired"):   # 30일 경과 → 비밀번호 변경 안내
+            if auth.get("pw_must_change"):   # 초기화(000000) → 변경 필요
+                self.after(450, self._must_change_prompt)
+            elif auth.get("pw_expired"):     # 30일 경과 → 비밀번호 변경 안내
                 self.after(450, self._pw_expired_prompt)
 
         def fail(msg):
-            v_status.set(msg)
             try:
                 btn_login.configure(state="normal")
             except Exception:
                 pass
+            if msg.startswith("LOCKED:"):   # 계정 잠김 → 해제 요청 제안
+                body = msg[len("LOCKED:"):]
+                v_status.set(body)
+                uname = v_user.get().strip()
+                if uname and pmsg.askyesno("계정 잠김",
+                                           body + "\n\n관리자에게 잠금 해제를 요청할까요?"):
+                    def w2():
+                        try:
+                            backend.request_unlock(uname)
+                            self.after(0, lambda: v_status.set(
+                                "잠금 해제를 요청했습니다. 관리자 승인 후 로그인하세요."))
+                        except Exception as e:   # noqa: BLE001
+                            self.after(0, lambda: v_status.set(f"요청 실패: {e}"))
+                    threading.Thread(target=w2, daemon=True).start()
+            else:
+                v_status.set(msg)
 
         e_user.bind("<Return>", lambda e: e_pw.focus_set())
         e_pw.bind("<Return>", lambda e: do_login())
@@ -1730,6 +1749,13 @@ class App(tk.Tk):
                       "보안을 위해 비밀번호를 변경해 주세요.")
         self._change_password()
 
+    def _must_change_prompt(self) -> None:
+        """관리자가 초기화(000000)한 비밀번호 → 즉시 변경 유도."""
+        pmsg.showinfo("비밀번호 변경 필요",
+                      "초기화된 비밀번호(000000)로 로그인했습니다.\n"
+                      "보안을 위해 새 비밀번호로 변경해 주세요.")
+        self._change_password()
+
     def _change_password(self) -> None:
         """비밀번호 변경 팝업(로그인/회원가입과 동일한 둥근 디자인)."""
         username = (self._auth or {}).get("username", "")
@@ -1850,6 +1876,126 @@ class App(tk.Tk):
         dlg.grab_set()
         entries[0].focus_set()
 
+    def _change_info(self) -> None:
+        """내 정보(이름·휴대폰) 변경 팝업 — 로그인/비밀번호 변경과 동일한 둥근 디자인."""
+        username = (self._auth or {}).get("username", "")
+        if not username:
+            return
+        KEY = "#FF00FE"
+        INDIGO, INDIGO_DK = "#1E0A5C", "#160848"
+        dlg = tk.Toplevel(self)
+        dlg.overrideredirect(True)
+        w, h = sc(384), sc(508)
+        sw, sh = dlg.winfo_screenwidth(), dlg.winfo_screenheight()
+        gx, gy = (sw - w) // 2, (sh - h) // 4
+        dlg.geometry(f"{w}x{h}+{max(0, gx)}+{max(0, gy)}")
+        cbg = "white"
+        try:
+            dlg.attributes("-topmost", True)
+            dlg.attributes("-transparentcolor", KEY)
+            dlg.configure(bg=KEY)
+            cbg = KEY
+        except tk.TclError:
+            dlg.configure(bg="white")
+        c = tk.Canvas(dlg, width=w, height=h, bg=cbg, highlightthickness=0, bd=0)
+        c.pack(fill="both", expand=True)
+        m, rad = sc(7), sc(30)
+        c.create_polygon(_round_rect_points(m, m, w - m, h - m, rad),
+                         fill="white", outline=HAIRLINE, width=1, smooth=True)
+        c.create_polygon(
+            _round_rect_points(w // 2 - sc(24), sc(18), w // 2 + sc(24), sc(22), sc(2)),
+            fill=GOLD, outline="", smooth=True)
+        try:
+            ic = tk.PhotoImage(file=resource_path("assets/app_icon.png"))
+            f = max(1, round(ic.width() / sc(40)))
+            ic = ic.subsample(f, f)
+        except tk.TclError:
+            ic = None
+        self._info_icon = ic
+        if ic is not None:
+            c.create_image(w // 2, sc(56), image=ic)
+        c.create_text(w // 2, sc(104), text="Price Check", fill=INDIGO,
+                      font=self._script_font(22))
+        c.create_text(w // 2, sc(130), text="정보 변경", fill="#6b7280", font=(FONT, 11))
+        c.create_line(w // 2 - sc(28), sc(150), w // 2 + sc(28), sc(150),
+                      fill=GOLD, width=1)
+        c.create_text(w // 2, h - sc(40), text="THE FEEL KOREA CO.,LTD.",
+                      fill="#a3a8a6", font=(FONT, 10))
+        c.create_text(w // 2, h - sc(22), text="Created by Claudio Lim",
+                      fill="#bfc4c2", font=(FONT, 8))
+        cls = c.create_text(w - sc(26), sc(28), text="✕", fill="#c4cbc8", font=(FONT, 11))
+        c.tag_bind(cls, "<Button-1>", lambda e: dlg.destroy())
+        c.tag_bind(cls, "<Enter>", lambda e: c.itemconfig(cls, fill="#dc2626"))
+        c.tag_bind(cls, "<Leave>", lambda e: c.itemconfig(cls, fill="#c4cbc8"))
+        drag = {"x": 0, "y": 0}
+        c.bind("<Button-1>", lambda e: drag.update(x=e.x, y=e.y))
+        c.bind("<B1-Motion>", lambda e: dlg.geometry(
+            f"+{dlg.winfo_x() + e.x - drag['x']}+{dlg.winfo_y() + e.y - drag['y']}"))
+
+        form = tk.Frame(dlg, bg="white")
+        form.place(x=sc(40), y=sc(172), width=w - sc(80), height=h - sc(228))
+        form.columnconfigure(0, weight=1)
+        tk.Label(form, text=f"아이디: {username}", bg="white", fg="#6b7280",
+                 font=(FONT, 9)).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        v_name = tk.StringVar(value=(self._auth or {}).get("name", ""))
+        v_phone = tk.StringVar(value=(self._auth or {}).get("phone", ""))
+        tk.Label(form, text="이름", bg="white", fg="#9aa3a0", font=(FONT, 9)).grid(
+            row=1, column=0, sticky="w", pady=(0, 2))
+        e_name = ttk.Entry(form, textvariable=v_name)
+        e_name.grid(row=2, column=0, sticky="ew", ipady=sc(4))
+        tk.Label(form, text="휴대폰 번호", bg="white", fg="#9aa3a0", font=(FONT, 9)).grid(
+            row=3, column=0, sticky="w", pady=(10, 2))
+        ttk.Entry(form, textvariable=v_phone).grid(row=4, column=0, sticky="ew", ipady=sc(4))
+        v_status = tk.StringVar(value="")
+        tk.Label(form, textvariable=v_status, bg="white", fg="#dc2626", font=(FONT, 9),
+                 wraplength=w - sc(96), justify="left").grid(
+                     row=5, column=0, sticky="w", pady=(10, 2))
+        btn = RoundedButton(form, "저장", lambda: submit(), bg="white",
+                            fill=INDIGO, fill_active=INDIGO_DK, fill_disabled="#b3aad4",
+                            fg="white", fg_disabled="#e7e2f5", height=42, radius=21)
+        btn.grid(row=6, column=0, sticky="ew", pady=(6, 0))
+        link = tk.Label(form, text="닫기", bg="white", fg="#6b7280",
+                        font=(FONT, 9, "underline"), cursor="hand2")
+        link.grid(row=7, column=0, pady=(10, 0))
+        link.bind("<Button-1>", lambda e: dlg.destroy())
+
+        def submit():
+            nm, ph = v_name.get().strip(), v_phone.get().strip()
+            v_status.set("저장 중…")
+            btn.configure(state="disabled")
+
+            def work():
+                try:
+                    backend.update_info(username, nm, ph)
+                    self.after(0, done)
+                except (backend.AuthError, backend.BackendError) as e:
+                    self.after(0, lambda: err(str(e)))
+                except Exception as e:   # noqa: BLE001
+                    self.after(0, lambda: err(f"오류: {e}"))
+
+            def done():
+                if self._auth is not None:
+                    self._auth["name"] = nm
+                    self._auth["phone"] = ph
+                try:
+                    self._draw_header()
+                except Exception:   # noqa: BLE001
+                    pass
+                dlg.destroy()
+                pmsg.showinfo("정보 변경", "정보가 변경되었습니다.")
+
+            def err(msg):
+                v_status.set(msg)
+                btn.configure(state="normal")
+            threading.Thread(target=work, daemon=True).start()
+
+        e_name.bind("<Return>", lambda e: submit())
+        dlg.lift()
+        dlg.focus_force()
+        dlg.after(350, lambda: dlg.winfo_exists() and dlg.attributes("-topmost", False))
+        dlg.grab_set()
+        e_name.focus_set()
+
     # ----- 탭: 사용자 관리(관리자 전용) -----
     def _build_user_admin_tab(self) -> None:
         root = self.tab_useradmin
@@ -1860,8 +2006,10 @@ class App(tk.Tk):
         btns = ttk.Frame(root)
         btns.pack(fill="x", padx=16, pady=(2, 6))
         accent_button(btns, "승인", lambda: self._useradmin_act("approve")).pack(side="left")
-        gray_button(btns, "ID 수정", self._useradmin_rename).pack(side="left", padx=6)
-        gray_button(btns, "거절", lambda: self._useradmin_act("reject")).pack(side="left")
+        gray_button(btns, "거절", lambda: self._useradmin_act("reject")).pack(side="left", padx=6)
+        gray_button(btns, "잠금 해제", self._useradmin_unlock).pack(side="left")
+        gray_button(btns, "비밀번호 초기화", self._useradmin_reset_pw).pack(side="left", padx=6)
+        gray_button(btns, "ID 수정", self._useradmin_rename).pack(side="left")
         gray_button(btns, "삭제", lambda: self._useradmin_act("delete")).pack(side="left", padx=6)
         gray_button(btns, "새로고침", self._render_user_admin).pack(side="left")
         self.useradmin_status = tk.StringVar(value="")
@@ -1869,16 +2017,19 @@ class App(tk.Tk):
 
         tf = tk.Frame(root, bg=BORDER)
         tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
-        cols = ("username", "name", "phone", "status", "role", "created_at")
+        cols = ("username", "name", "phone", "status", "role", "created_at", "last")
         heads = {"username": "아이디", "name": "이름", "phone": "휴대폰",
-                 "status": "상태", "role": "권한", "created_at": "가입일시"}
+                 "status": "상태", "role": "권한", "created_at": "가입일시",
+                 "last": "마지막 접속"}
+        widths = {"username": sc(120), "name": sc(78), "phone": sc(110),
+                  "status": sc(110), "role": sc(66), "created_at": sc(118),
+                  "last": sc(190)}
         self.tree_useradmin = ttk.Treeview(tf, show="headings", columns=cols,
                                            selectmode="browse")
         for c in cols:
             self.tree_useradmin.heading(c, text=heads[c])
             self.tree_useradmin.column(c, anchor="center",
-                                       width=(sc(150) if c == "username" else sc(118)),
-                                       stretch=True)
+                                       width=widths.get(c, sc(110)), stretch=True)
         self.tree_useradmin.tag_configure("odd", background="#f6faf9")
         ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_useradmin.yview)
         self.tree_useradmin.configure(yscrollcommand=ysb.set)
@@ -1899,20 +2050,35 @@ class App(tk.Tk):
         self.useradmin_status.set("불러오는 중…")
         STAT = {"pending": "승인대기", "approved": "승인됨", "rejected": "거절됨"}
 
+        def disp_status(u):
+            if u.get("locked"):
+                return "🔒잠김(해제요청)" if u.get("unlock_requested") else "🔒잠김"
+            return STAT.get(u.get("status"), u.get("status", ""))
+
+        def prio(u):   # 잠금(해제요청)·승인대기 우선 표시
+            if u.get("locked"):
+                return 0
+            if u.get("status") == "pending":
+                return 1
+            return 2
+
         def fill(users):
             self.tree_useradmin.delete(*self.tree_useradmin.get_children())
-            users.sort(key=lambda u: (u.get("status") != "pending", u.get("username", "")))
+            users.sort(key=lambda u: (prio(u), u.get("username", "")))
             for i, u in enumerate(users):
                 self.tree_useradmin.insert(
                     "", "end", iid=u.get("username", ""),
                     tags=(("odd",) if i % 2 else ()),
                     values=(
                         u.get("username", ""), u.get("name", ""), u.get("phone", ""),
-                        STAT.get(u.get("status"), u.get("status", "")),
+                        disp_status(u),
                         "관리자" if u.get("role") == "admin" else "사용자",
-                        u.get("created_at", "")))
+                        u.get("created_at", ""),
+                        self._format_last(u.get("last_login"))))
             pend = sum(1 for u in users if u.get("status") == "pending")
-            self.useradmin_status.set(f"총 {len(users)}명 · 승인대기 {pend}명 — 행을 클릭해 선택하세요")
+            lock = sum(1 for u in users if u.get("locked"))
+            self.useradmin_status.set(
+                f"총 {len(users)}명 · 승인대기 {pend} · 잠김 {lock} — 행을 클릭해 선택하세요")
 
         def work():
             try:
@@ -1980,6 +2146,75 @@ class App(tk.Tk):
             try:
                 backend.rename_user(old, new)
                 self.after(0, self._render_user_admin)
+            except Exception as e:   # noqa: BLE001
+                self.after(0, lambda: self.useradmin_status.set(f"오류: {e}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    @staticmethod
+    def _relative_time(ts) -> str:
+        """'YYYY-MM-DD HH:MM' → 현재 기준 상대시간(방금 전/N분 전/N시간 전/N일 전)."""
+        try:
+            st = time.strptime(str(ts)[:16], "%Y-%m-%d %H:%M")
+            diff = time.time() - time.mktime(st)
+        except (ValueError, TypeError):
+            return ""
+        if diff < 60:
+            return "방금 전"
+        mins = int(diff // 60)
+        if mins < 60:
+            return f"{mins}분 전"
+        hrs = mins // 60
+        if hrs < 24:
+            return f"{hrs}시간 전"
+        days = hrs // 24
+        if days < 30:
+            return f"{days}일 전"
+        return f"{days // 30}개월 전"
+
+    def _format_last(self, ts) -> str:
+        if not ts:
+            return "-"
+        rel = self._relative_time(ts)
+        return f"{ts} ({rel})" if rel else str(ts)
+
+    def _useradmin_selected(self):
+        sel = self.tree_useradmin.selection() if hasattr(self, "tree_useradmin") else None
+        if not sel:
+            self.useradmin_status.set("먼저 목록에서 사용자(행)를 클릭해 선택하세요.")
+            return None
+        return sel[0]
+
+    def _useradmin_unlock(self) -> None:
+        uname = self._useradmin_selected()
+        if not uname:
+            return
+        self.useradmin_status.set("잠금 해제 중…")
+
+        def work():
+            try:
+                backend.unlock_user(uname)
+                self.after(0, lambda: (self._render_user_admin(),
+                                       pmsg.showinfo("잠금 해제", f"'{uname}' 계정 잠금을 해제했습니다.")))
+            except Exception as e:   # noqa: BLE001
+                self.after(0, lambda: self.useradmin_status.set(f"오류: {e}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _useradmin_reset_pw(self) -> None:
+        uname = self._useradmin_selected()
+        if not uname:
+            return
+        if not pmsg.askyesno("비밀번호 초기화",
+                             f"'{uname}'의 비밀번호를 000000 으로 초기화할까요?\n"
+                             "사용자는 다음 로그인 시 새 비밀번호로 변경하게 됩니다."):
+            return
+        self.useradmin_status.set("비밀번호 초기화 중…")
+
+        def work():
+            try:
+                backend.reset_password(uname)
+                self.after(0, lambda: (self._render_user_admin(),
+                                       pmsg.showinfo("비밀번호 초기화",
+                                                     f"'{uname}'의 비밀번호를 000000 으로 초기화했습니다.")))
             except Exception as e:   # noqa: BLE001
                 self.after(0, lambda: self.useradmin_status.set(f"오류: {e}"))
         threading.Thread(target=work, daemon=True).start()
