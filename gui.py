@@ -1710,6 +1710,7 @@ class App(tk.Tk):
         self._build_tabbar(admin=(role == "admin"))
         self._switch_tab("inv")
         self._draw_header()   # 헤더에 사용자/로그아웃 표시
+        self._start_daily_scheduler()   # 23:00 자동 확정 점검 시작
 
     def _logout(self) -> None:
         """로그아웃 → 메인 숨기고 로그인 팝업을 다시 띄운다."""
@@ -1854,7 +1855,7 @@ class App(tk.Tk):
         root = self.tab_useradmin
         ttk.Label(root, style="Muted.TLabel", justify="left",
                   text="회원가입 신청을 승인·거절하거나 사용자를 삭제합니다. (관리자 전용)\n"
-                       "※ 목록에서 대상을 선택한 뒤 아래 버튼을 누르세요. 승인대기 사용자가 위에 표시됩니다."
+                       "※ 목록에서 사용자 행을 클릭해 선택(파란 강조)한 뒤, 위의 승인 / ID 수정 / 거절 / 삭제 버튼을 누르세요. 승인대기 사용자가 위에 표시됩니다."
                   ).pack(fill="x", padx=16, pady=(12, 2))
         btns = ttk.Frame(root)
         btns.pack(fill="x", padx=16, pady=(2, 6))
@@ -1871,18 +1872,23 @@ class App(tk.Tk):
         cols = ("username", "name", "phone", "status", "role", "created_at")
         heads = {"username": "아이디", "name": "이름", "phone": "휴대폰",
                  "status": "상태", "role": "권한", "created_at": "가입일시"}
-        self.tree_useradmin = ttk.Treeview(tf, show="headings", columns=cols)
+        self.tree_useradmin = ttk.Treeview(tf, show="headings", columns=cols,
+                                           selectmode="browse")
         for c in cols:
             self.tree_useradmin.heading(c, text=heads[c])
             self.tree_useradmin.column(c, anchor="center",
                                        width=(sc(150) if c == "username" else sc(118)),
                                        stretch=True)
+        self.tree_useradmin.tag_configure("odd", background="#f6faf9")
         ysb = ttk.Scrollbar(tf, orient="vertical", command=self.tree_useradmin.yview)
         self.tree_useradmin.configure(yscrollcommand=ysb.set)
         self.tree_useradmin.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         ysb.grid(row=0, column=1, sticky="ns")
         tf.rowconfigure(0, weight=1)
         tf.columnconfigure(0, weight=1)
+        # 클릭한 행을 확실히 선택 + 선택 사용자 표시
+        self.tree_useradmin.bind("<Button-1>", self._useradmin_click, add="+")
+        self.tree_useradmin.bind("<<TreeviewSelect>>", self._on_useradmin_select)
 
     def _render_user_admin(self) -> None:
         if not hasattr(self, "tree_useradmin"):
@@ -1896,14 +1902,17 @@ class App(tk.Tk):
         def fill(users):
             self.tree_useradmin.delete(*self.tree_useradmin.get_children())
             users.sort(key=lambda u: (u.get("status") != "pending", u.get("username", "")))
-            for u in users:
-                self.tree_useradmin.insert("", "end", iid=u.get("username", ""), values=(
-                    u.get("username", ""), u.get("name", ""), u.get("phone", ""),
-                    STAT.get(u.get("status"), u.get("status", "")),
-                    "관리자" if u.get("role") == "admin" else "사용자",
-                    u.get("created_at", "")))
+            for i, u in enumerate(users):
+                self.tree_useradmin.insert(
+                    "", "end", iid=u.get("username", ""),
+                    tags=(("odd",) if i % 2 else ()),
+                    values=(
+                        u.get("username", ""), u.get("name", ""), u.get("phone", ""),
+                        STAT.get(u.get("status"), u.get("status", "")),
+                        "관리자" if u.get("role") == "admin" else "사용자",
+                        u.get("created_at", "")))
             pend = sum(1 for u in users if u.get("status") == "pending")
-            self.useradmin_status.set(f"총 {len(users)}명 · 승인대기 {pend}명")
+            self.useradmin_status.set(f"총 {len(users)}명 · 승인대기 {pend}명 — 행을 클릭해 선택하세요")
 
         def work():
             try:
@@ -1913,12 +1922,28 @@ class App(tk.Tk):
                 self.after(0, lambda: self.useradmin_status.set(f"오류: {e}"))
         threading.Thread(target=work, daemon=True).start()
 
+    def _useradmin_click(self, event) -> None:
+        """클릭한 위치의 행을 확실히 선택한다(헤더/빈 공간 제외)."""
+        row = self.tree_useradmin.identify_row(event.y)
+        if row:
+            self.tree_useradmin.selection_set(row)
+            self.tree_useradmin.focus(row)
+
+    def _on_useradmin_select(self, event=None) -> None:
+        sel = self.tree_useradmin.selection()
+        if not sel:
+            return
+        vals = self.tree_useradmin.item(sel[0], "values")
+        if vals:
+            uid, name, phone, status = vals[0], vals[1], vals[2], vals[3]
+            self.useradmin_status.set(f"선택됨 → {uid} ({name}) · {status}")
+
     def _useradmin_act(self, action: str) -> None:
         if not hasattr(self, "tree_useradmin"):
             return
         sel = self.tree_useradmin.selection()
         if not sel:
-            self.useradmin_status.set("대상 사용자를 선택하세요.")
+            self.useradmin_status.set("먼저 목록에서 사용자(행)를 클릭해 선택하세요.")
             return
         uname = sel[0]
         labels = {"approve": "승인", "reject": "거절", "delete": "삭제"}
@@ -1943,7 +1968,7 @@ class App(tk.Tk):
             return
         sel = self.tree_useradmin.selection()
         if not sel:
-            self.useradmin_status.set("대상 사용자를 선택하세요.")
+            self.useradmin_status.set("먼저 목록에서 사용자(행)를 클릭해 선택하세요.")
             return
         old = sel[0]
         new = self._ask_text("ID 수정", f"'{old}' 의 새 아이디를 입력하세요.", old)
@@ -3189,10 +3214,11 @@ class App(tk.Tk):
             "same": sum(1 for r in rows if r.get("_tag") == "same"),
             "by": (self._auth or {}).get("username", ""),   # 조회자 ID
         }
-        # 로컬 백업 저장(오프라인 대비)
-        hist = [h for h in load_daily_status() if h.get("date") != rec["date"]]
+        # 로컬 백업 저장(오프라인 대비) — 같은 날의 여러 조회를 누적(date+time)
+        hist = [h for h in load_daily_status()
+                if not (h.get("date") == rec["date"] and h.get("time") == rec["time"])]
         hist.append(rec)
-        hist.sort(key=lambda h: h.get("date", ""))
+        hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")))
         save_daily_status(hist)
         # 공유 저장소에 기록(모두가 볼 수 있도록)
         if backend.backend_enabled():
@@ -3209,9 +3235,8 @@ class App(tk.Tk):
     def _build_daily_tab(self) -> None:
         root = self.tab_daily
         ttk.Label(root, style="Muted.TLabel", justify="left",
-                  text="원가비교를 실행할 때마다 그날의 대시보드 집계(전체·원가차이·미입고·미매칭·원가일치)가 "
-                       "자동 저장되어 일자별 추이를 확인할 수 있습니다.\n"
-                       "※ 같은 날 여러 번 비교하면 가장 최근 결과로 갱신됩니다. 괄호 안은 전체 대비 비율(%)입니다."
+                  text="원가비교를 실행할 때마다 그날의 대시보드 집계(전체·원가차이·미입고·미매칭·원가일치)가 자동 저장됩니다.\n"
+                       "※ 당일(00:00~22:59)에는 모든 조회 기록이 표시되고, 매일 23:00에 그날 '마지막 조회 결과'로 자동 확정되어 1건만 남습니다. 괄호 안은 전체 대비 비율(%)."
                   ).pack(fill="x", padx=16, pady=(12, 2))
 
         btns = ttk.Frame(root)
@@ -3276,6 +3301,13 @@ class App(tk.Tk):
         if backend.backend_enabled():
             self.daily_status.set("공유 기록 불러오는 중…")
             def work():
+                # 세션 1회: 과거 날짜(23:00 미확정)를 최종 1건으로 정리
+                if not getattr(self, "_old_finalized", False):
+                    self._old_finalized = True
+                    try:
+                        backend.finalize_old_days(time.strftime("%Y-%m-%d"))
+                    except Exception:   # noqa: BLE001
+                        pass
                 try:
                     hist = backend.load_daily()
                 except Exception:   # noqa: BLE001
@@ -3284,6 +3316,39 @@ class App(tk.Tk):
             threading.Thread(target=work, daemon=True).start()
         else:
             self._fill_daily(load_daily_status())
+
+    # ----- 23:00 자동 확정 스케줄러 -----
+    def _start_daily_scheduler(self) -> None:
+        if getattr(self, "_daily_sched_started", False):
+            return
+        self._daily_sched_started = True
+        self._last_finalized = ""
+        self._daily_tick()
+
+    def _daily_tick(self) -> None:
+        try:
+            lt = time.localtime()
+            today = time.strftime("%Y-%m-%d", lt)
+            if lt.tm_hour >= 23 and getattr(self, "_last_finalized", "") != today:
+                self._last_finalized = today
+                self._finalize_today(today)
+        except Exception:   # noqa: BLE001
+            pass
+        try:
+            self.after(60000, self._daily_tick)   # 1분마다 점검
+        except Exception:   # noqa: BLE001
+            pass
+
+    def _finalize_today(self, today: str) -> None:
+        if not backend.backend_enabled():
+            return
+        def work():
+            try:
+                backend.finalize_daily(today)
+            except Exception:   # noqa: BLE001
+                pass
+            self.after(0, self._render_daily)
+        threading.Thread(target=work, daemon=True).start()
 
     def _fill_daily(self, hist: list) -> None:
         if not hasattr(self, "tree_daily"):

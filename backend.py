@@ -341,8 +341,8 @@ def load_daily() -> list:
     return data if isinstance(data, list) else []
 
 
-def record_daily(record: dict, retries: int = 3) -> None:
-    """오늘 날짜 기록을 공유 저장소에 저장(같은 날짜는 최신으로 갱신). 충돌 시 재시도."""
+def record_daily(record: dict, retries: int = 4) -> None:
+    """일일현황 기록 추가(같은 날의 여러 조회를 모두 보관 — date+time 단위). 충돌 시 재시도."""
     if not backend_enabled():
         raise BackendError("백엔드가 설정되지 않았습니다.")
     last = None
@@ -350,7 +350,10 @@ def record_daily(record: dict, retries: int = 3) -> None:
         try:
             data, sha = _get_file(DAILY_PATH)
             hist = data if isinstance(data, list) else []
-            hist = [h for h in hist if h.get("date") != record.get("date")]
+            # 같은 (날짜, 시각)만 갱신 — 다른 시각은 누적(낮 동안 모든 조회 표시)
+            hist = [h for h in hist
+                    if not (h.get("date") == record.get("date")
+                            and h.get("time") == record.get("time"))]
             hist.append(record)
             hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")))
             _put_file(DAILY_PATH, hist, sha, f"daily {record.get('date')}")
@@ -360,3 +363,69 @@ def record_daily(record: dict, retries: int = 3) -> None:
             time.sleep(0.6)
     if last:
         raise last
+
+
+def finalize_daily(date_str: str, retries: int = 4):
+    """해당 날짜를 '23:00 최종' 1건으로 확정(그날 마지막 조회값 채택, 나머지 삭제)."""
+    if not backend_enabled():
+        return None
+    last = None
+    for _ in range(max(1, retries)):
+        try:
+            data, sha = _get_file(DAILY_PATH)
+            hist = data if isinstance(data, list) else []
+            same = [h for h in hist if h.get("date") == date_str]
+            if not same:
+                return None
+            latest = dict(max(same, key=lambda h: h.get("time", "")))
+            latest["time"] = "23:00"
+            latest["final"] = True
+            hist = [h for h in hist if h.get("date") != date_str]
+            hist.append(latest)
+            hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")))
+            _put_file(DAILY_PATH, hist, sha, f"finalize {date_str}")
+            return latest
+        except BackendError as e:
+            last = e
+            time.sleep(0.6)
+    if last:
+        raise last
+
+
+def finalize_old_days(today_str: str, retries: int = 4) -> bool:
+    """today 이전 날짜 중 여러 기록이 남은 날을 각각 '23:00 최종' 1건으로 정리.
+
+    (앱이 23:00에 닫혀 있어 확정되지 못한 과거 날짜 보정). 변경이 있을 때만 저장.
+    """
+    if not backend_enabled():
+        return False
+    last = None
+    for _ in range(max(1, retries)):
+        try:
+            data, sha = _get_file(DAILY_PATH)
+            hist = data if isinstance(data, list) else []
+            bydate: dict = {}
+            for h in hist:
+                bydate.setdefault(h.get("date", ""), []).append(h)
+            new_hist = []
+            changed = False
+            for d, recs in bydate.items():
+                if d and d < today_str and len(recs) > 1:
+                    latest = dict(max(recs, key=lambda h: h.get("time", "")))
+                    latest["time"] = "23:00"
+                    latest["final"] = True
+                    new_hist.append(latest)
+                    changed = True
+                else:
+                    new_hist.extend(recs)
+            if not changed:
+                return False
+            new_hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")))
+            _put_file(DAILY_PATH, new_hist, sha, f"finalize-old {today_str}")
+            return True
+        except BackendError as e:
+            last = e
+            time.sleep(0.6)
+    if last:
+        raise last
+    return False
