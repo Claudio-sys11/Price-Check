@@ -1268,7 +1268,8 @@ class App(tk.Tk):
         settings_menu = tk.Menu(menubar, tearoff=0, background="white", foreground=TEXT,
                                 activebackground=ACCENT, activeforeground="white")
         settings_menu.add_command(label="인증 정보 설정...", command=self._open_settings)
-        settings_menu.add_command(label="입고단가 캐시 비우기(갱신)", command=self._clear_price_cache)
+        settings_menu.add_command(label="입고단가 캐시 비우기 (원가가 안 바뀔 때)",
+                                  command=self._clear_price_cache)
         settings_menu.add_separator()
         settings_menu.add_command(label="종료", command=self.destroy)
         menubar.add_cascade(label="설정", menu=settings_menu)
@@ -1344,9 +1345,48 @@ class App(tk.Tk):
         self._save_config()
         win.destroy()
 
+    def _attach_tooltip(self, widget, text: str) -> None:
+        """위젯에 마우스 오버 시 표시되는 설명(툴팁)을 붙인다."""
+        state = {"win": None}
+
+        def show(_e=None):
+            if state["win"] is not None or not text:
+                return
+            try:
+                x = widget.winfo_rootx() + sc(8)
+                y = widget.winfo_rooty() + widget.winfo_height() + sc(6)
+            except Exception:   # noqa: BLE001
+                return
+            tw = tk.Toplevel(self)
+            tw.overrideredirect(True)
+            try:
+                tw.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            tk.Label(tw, text=text, bg="#1f2937", fg="white", font=(FONT, 9),
+                     justify="left", padx=sc(10), pady=sc(7),
+                     wraplength=sc(320)).pack()
+            tw.geometry(f"+{max(0, x)}+{max(0, y)}")
+            state["win"] = tw
+
+        def hide(_e=None):
+            if state["win"] is not None:
+                try:
+                    state["win"].destroy()
+                except Exception:   # noqa: BLE001
+                    pass
+                state["win"] = None
+
+        widget.bind("<Enter>", show, add="+")
+        widget.bind("<Leave>", hide, add="+")
+
     def _clear_price_cache(self) -> None:
         save_price_cache({})
-        pmsg.showinfo("입고단가 캐시", "입고단가 캐시를 비웠습니다.\n다음 조회 때 품목등록에서 다시 받아옵니다.")
+        pmsg.showinfo("입고단가 캐시",
+                      "입고단가 캐시를 비웠습니다.\n"
+                      "EcountERP에서 원가(입고단가)를 변경했는데 조회 결과에 반영되지 않을 때 "
+                      "이 기능을 사용하세요.\n"
+                      "다음 조회 때 품목등록에서 최신 입고단가를 다시 받아옵니다.")
 
     # ================= 로그인 / 회원가입 / 사용자 관리 =================
     def _center_window(self, win, w: int, h: int) -> None:
@@ -2405,6 +2445,11 @@ class App(tk.Tk):
         self.btn_sub_csv.pack(side="left")
         self.btn_clear_cache = gray_button(btns, "🗑  캐시 비우기", self._clear_price_cache)
         self.btn_clear_cache.pack(side="left", padx=8)
+        self._attach_tooltip(
+            self.btn_clear_cache,
+            "원가(입고단가)를 변경했는데 조회 결과에 반영되지 않으면\n"
+            "이 버튼으로 캐시를 비우세요.\n"
+            "다음 조회 때 품목등록에서 최신 입고단가를 다시 받아옵니다.")
         self.status = tk.StringVar(value="대기 중")
         ttk.Label(btns, textvariable=self.status, style="Status.TLabel").pack(side="right")
 
