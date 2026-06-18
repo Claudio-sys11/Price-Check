@@ -3449,6 +3449,8 @@ class App(tk.Tk):
             "unmatched": sum(1 for r in rows if r.get("_tag") == "unmatched"),
             "same": sum(1 for r in rows if r.get("_tag") == "same"),
             "by": (self._auth or {}).get("username", ""),   # 조회자 ID
+            "by_name": ((self._auth or {}).get("name")
+                        or self._display_user((self._auth or {}).get("username", ""))),
         }
         # 로컬 백업 저장(오프라인 대비) — 같은 날의 여러 조회를 누적(date+time)
         hist = [h for h in load_daily_status()
@@ -3544,6 +3546,13 @@ class App(tk.Tk):
                         backend.finalize_old_days(time.strftime("%Y-%m-%d"))
                     except Exception:   # noqa: BLE001
                         pass
+                # 조회자 ID → 이름 매핑(과거 기록 표시용)
+                try:
+                    self._user_name_map = {
+                        u.get("username", ""): u.get("name", "")
+                        for u in backend.list_users() if u.get("name")}
+                except Exception:   # noqa: BLE001
+                    pass
                 try:
                     hist = backend.load_daily()
                 except Exception:   # noqa: BLE001
@@ -3585,6 +3594,17 @@ class App(tk.Tk):
                 pass
             self.after(0, self._render_daily)
         threading.Thread(target=work, daemon=True).start()
+
+    def _daily_viewer_name(self, h) -> str:
+        """일일현황 조회자 표시명(이름). by_name → 사용자목록 매핑 → ID(관리자는 임정수)."""
+        bn = h.get("by_name")
+        if bn:
+            return bn
+        bid = h.get("by", "")
+        nm = getattr(self, "_user_name_map", {}).get(bid)
+        if nm:
+            return nm
+        return self._display_user(bid)
 
     def _fill_daily(self, hist: list) -> None:
         if not hasattr(self, "tree_daily"):
@@ -3785,7 +3805,7 @@ class App(tk.Tk):
                 h.get("date", ""), h.get("time", ""), f"{t:,}",
                 cell(h.get("diff", 0), t), cell(h.get("nostock", 0), t),
                 cell(h.get("unmatched", 0), t), cell(h.get("same", 0), t),
-                self._display_user(h.get("by", ""))))
+                self._daily_viewer_name(h)))
         shared = " (공유)" if backend.backend_enabled() else ""
         mtxt = "전체" if not self._daily_month else f"{self._daily_month}월"
         self.daily_status.set(
@@ -3908,7 +3928,7 @@ class App(tk.Tk):
             "일자": h.get("date", ""), "갱신시각": h.get("time", ""),
             "전체": h.get("total", 0), "원가차이": h.get("diff", 0),
             "미입고": h.get("nostock", 0), "미매칭": h.get("unmatched", 0),
-            "원가일치": h.get("same", 0), "조회자": self._display_user(h.get("by", "")),
+            "원가일치": h.get("same", 0), "조회자": self._daily_viewer_name(h),
         } for h in hist]
         export_rows_excel(rows, "일일현황.xlsx")
 
