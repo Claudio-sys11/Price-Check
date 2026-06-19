@@ -1425,6 +1425,98 @@ class App(tk.Tk):
                       "이 기능을 사용하세요.\n"
                       "다음 조회 때 품목등록에서 최신 입고단가를 다시 받아옵니다.")
 
+    def _fetch_prices_from_ecount(self) -> None:
+        """EcountERP에 1회 접속해 품목등록 입고단가를 일괄로 받아 캐시에 반영."""
+        cfg = self._current_config()
+        if not cfg["COM_CODE"] or not cfg["USER_ID"] or not cfg["API_CERT_KEY"]:
+            pmsg.showwarning("입력 필요", "회사코드 / 사용자ID / API 인증키를 먼저 설정하세요.")
+            return
+        used = get_today_api_calls()
+        if used + EST_CALLS_PER_QUERY > DAILY_API_LIMIT:
+            pmsg.showwarning(
+                "EcountERP 일일 한도 초과 방지",
+                f"오늘 EcountERP 사용량이 일일 허용량(5,000건)에 도달하여 진행하지 않습니다.\n\n"
+                f"• 현재 사용량: {used:,}건 / 5,000건\n"
+                "자정이 지나면 초기화됩니다.")
+            return
+        self.btn_fetch_price.configure(state="disabled")
+        self.status.set("EcountERP 입고단가 받는 중… (접속 1회)")
+        threading.Thread(target=self._do_fetch_prices, args=(cfg,), daemon=True).start()
+
+    def _do_fetch_prices(self, cfg: dict) -> None:
+        client = None
+        allp: dict = {}
+        err = None
+        diag = None
+        try:
+            client = EcountClient(
+                com_code=cfg["COM_CODE"], user_id=cfg["USER_ID"],
+                api_cert_key=cfg["API_CERT_KEY"], lan_type=cfg.get("LAN_TYPE", "ko-KR"),
+                env=cfg.get("ENV", "production"))
+            client.get_zone()
+            client.login()                      # 접속 1회
+            allp = client.get_all_prices()      # 같은 세션 일괄 조회(추가 로그인 없음)
+            nonzero = sum(1 for v in allp.values() if v and v > 0)
+            if not allp or not nonzero:
+                # 일괄로 단가를 못 받음 → 품목 1건으로 원인 진단
+                sample = None
+                inv = getattr(self, "_inventory_rows", None)
+                if inv:
+                    cf = cmp.detect_ecount_fields(inv).get("품목코드") or "PROD_CD"
+                    for r in inv:
+                        c = str(r.get(cf, "")).strip()
+                        if c:
+                            sample = c
+                            break
+                if sample is None and allp:
+                    sample = next(iter(allp))
+                if sample:
+                    diag = client.diagnose_price(sample)
+        except EcountApiError as exc:
+            err = exc
+        except Exception as exc:   # noqa: BLE001
+            err = exc
+        finally:
+            if client is not None:
+                self._record_api_usage(client)
+        self.after(0, lambda: self._fetch_prices_done(allp, err, diag))
+
+    def _fetch_prices_done(self, allp: dict, err, diag) -> None:
+        self.btn_fetch_price.configure(state="normal")
+        if err:
+            self.status.set("입고단가 받기 실패")
+            pmsg.showerror("입고단가 받기 실패", str(err))
+            return
+        prices = {k: v for k, v in (allp or {}).items() if k}
+        nonzero = sum(1 for v in prices.values() if v and v > 0)
+        if not prices or not nonzero:
+            self.status.set("입고단가 받기 — 일괄 응답에 단가 없음")
+            if diag:
+                self._show_price_diag(diag)
+            else:
+                pmsg.showwarning(
+                    "입고단가 받기",
+                    "EcountERP 일괄(목록) 응답에 입고단가가 포함되지 않습니다.\n\n"
+                    "→ EcountERP에서 품목 목록을 CSV/Excel로 내보낸 뒤,\n"
+                    "   옆의 [📄 파일에서] 버튼으로 불러오면 정확히 매칭됩니다.")
+            return
+        cache = load_price_cache()
+        cache.update(prices)
+        save_price_cache(cache)
+        self.status.set(f"EcountERP 입고단가 {len(prices):,}건 받음 (접속 없이 매칭)")
+        # 이미 재고현황을 조회해 둔 상태면 즉시 재매칭
+        if getattr(self, "_inventory_rows", None):
+            code_f = (cmp.detect_ecount_fields(self._inventory_rows)
+                      .get("품목코드") or "PROD_CD")
+            inv_codes = [str(r.get(code_f, "")).strip() for r in self._inventory_rows]
+            full = {c: cache[c] for c in inv_codes if c and c in cache}
+            new_all = cmp.build_inventory_display(self._inventory_rows, price_map=full)
+            self._prices_updated(self._inventory_rows, new_all, len(full))
+        pmsg.showinfo(
+            "입고단가 받기 완료",
+            f"{len(prices):,}건의 입고단가를 받았습니다.\n"
+            "이제 재고현황 조회 시 접속 없이 입고단가가 매칭됩니다.")
+
     def _import_price_file(self) -> None:
         """EcountERP 품목 내보내기 파일(CSV/Excel)을 불러와 입고단가 캐시에 반영.
 
@@ -2549,12 +2641,18 @@ class App(tk.Tk):
         self.btn_sub_csv = gray_button(btns, "소계/평균만 내보내기", self._export_subtotals)
         self.btn_sub_csv.configure(state="disabled")
         self.btn_sub_csv.pack(side="left")
-        self.btn_import_price = gray_button(btns, "📄  입고단가 파일 불러오기",
-                                            self._import_price_file)
-        self.btn_import_price.pack(side="left", padx=8)
+        self.btn_fetch_price = gray_button(btns, "⬇  EcountERP 입고단가 받기",
+                                           self._fetch_prices_from_ecount)
+        self.btn_fetch_price.pack(side="left", padx=8)
+        self._attach_tooltip(
+            self.btn_fetch_price,
+            "EcountERP에 1회 접속해 품목등록 입고단가를 일괄로 받아옵니다.\n"
+            "받은 뒤에는 재고현황 조회 시 접속 없이 입고단가가 매칭됩니다.")
+        self.btn_import_price = gray_button(btns, "📄  파일에서", self._import_price_file)
+        self.btn_import_price.pack(side="left")
         self._attach_tooltip(
             self.btn_import_price,
-            "EcountERP에서 내보낸 품목 파일(CSV/Excel, 1만건 이상 가능)을 불러와\n"
+            "EcountERP에서 내보낸 품목 파일(CSV/Excel, 1만건 이상 가능)을 직접 선택해\n"
             "접속 없이 입고단가를 매칭합니다.\n"
             "파일에 '품목코드'와 '입고단가' 컬럼이 있으면 자동 인식합니다.")
         self.btn_clear_cache = gray_button(btns, "🗑  캐시 비우기", self._clear_price_cache)
