@@ -3326,21 +3326,68 @@ class App(tk.Tk):
         # 2) 재고가 있는 품목 중 캐시에 없는 것만 품목별로 조회해 채우고 자동 갱신
         missing = [c for c in stock_codes if c not in cache]
         if missing and getattr(self, "_query_seq", 0) == my_seq:
+            self.after(0, self._start_match_progress, len(missing))
             def prog(d, t):
-                self.after(0, lambda d=d, t=t: self.status.set(
-                    f"입고단가 매칭 중… {d}/{t} (완료 후 자동 갱신)"))
+                self.after(0, self._set_match_progress, d, t)
             try:
                 fetched = client.get_prices(
                     missing, progress=prog,
                     should_stop=lambda: getattr(self, "_query_seq", 0) != my_seq)
             except EcountApiError:
                 fetched = {}
+            self.after(0, self._stop_match_progress, len(fetched), len(missing))
             if fetched and getattr(self, "_query_seq", 0) == my_seq:
                 cache.update(fetched)
                 save_price_cache(cache)
                 full_map = {c: cache[c] for c in inv_codes if c in cache}
                 new_all = cmp.build_inventory_display(rows, price_map=full_map)
                 self.after(0, self._prices_updated, rows, new_all, len(fetched))
+
+    # ---- 입고단가 매칭 진행 표시(경과시간 매초 갱신 + %) -----------------
+    def _start_match_progress(self, total: int) -> None:
+        """매칭 시작: 경과시간 타이머 시작(멈춤/진행 구분용)."""
+        j = getattr(self, "_match_job", None)
+        if j:
+            try:
+                self.after_cancel(j)
+            except Exception:  # noqa: BLE001
+                pass
+        self._match_t0 = time.time()
+        self._match_total = max(0, int(total))
+        self._match_done = 0
+        self._match_active = True
+        self._match_tick()
+
+    def _set_match_progress(self, d: int, t: int) -> None:
+        self._match_done = int(d)
+        self._match_total = int(t)
+
+    def _match_tick(self) -> None:
+        if not getattr(self, "_match_active", False):
+            return
+        el = int(time.time() - getattr(self, "_match_t0", time.time()))
+        t = getattr(self, "_match_total", 0) or 0
+        d = getattr(self, "_match_done", 0) or 0
+        pct = round(d * 100 / t) if t else 0
+        mm, ss = divmod(el, 60)
+        self.status.set(
+            f"입고단가 매칭 중… {pct}% ({d:,}/{t:,}) · 경과 {mm}:{ss:02d} (완료 후 자동 갱신)")
+        self._match_job = self.after(1000, self._match_tick)
+
+    def _stop_match_progress(self, n_fetched: int = 0, total: int = 0) -> None:
+        """매칭 종료: 타이머 정지 + 소요시간·결과 표시."""
+        self._match_active = False
+        job = getattr(self, "_match_job", None)
+        if job:
+            try:
+                self.after_cancel(job)
+            except Exception:  # noqa: BLE001
+                pass
+            self._match_job = None
+        el = int(time.time() - getattr(self, "_match_t0", time.time()))
+        mm, ss = divmod(el, 60)
+        self.status.set(
+            f"입고단가 매칭 완료 — {int(n_fetched):,}/{int(total):,}건 (소요 {mm}:{ss:02d})")
 
     def _query_failed(self, msg: str) -> None:
         self.btn_query.configure(state="normal")
