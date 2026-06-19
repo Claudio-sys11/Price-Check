@@ -3297,7 +3297,10 @@ class App(tk.Tk):
                 self.after(0, self._query_failed, str(exc2))
                 return
 
-        # 입고단가: 같은 세션으로 품목등록(IN_PRICE)을 '1회' 일괄 조회(추가 로그인 없음)
+        # 입고단가: 품목코드별로 품목등록(IN_PRICE)을 조회해 매칭(캐시 활용)
+        #   주의: 빈 조건 일괄 조회는 EcountERP 목록에서 IN_PRICE 를 0/빈값으로 주는 경우가
+        #   있어 신뢰할 수 없다 → '품목코드 지정' 조회만 정확한 입고단가를 돌려주므로
+        #   품목별 조회(병렬+재시도)로만 매칭한다.
         code_f = cmp.detect_ecount_fields(rows).get("품목코드") or "PROD_CD"
         inv_codes = list(dict.fromkeys(
             str(r.get(code_f, "")).strip() for r in rows if str(r.get(code_f, "")).strip()))
@@ -3308,37 +3311,24 @@ class App(tk.Tk):
         all_display = cmp.build_inventory_display(rows, price_map=price_map)
         self.after(0, self._query_done, data, rows, all_display, note)
 
-        # 2) 입고단가 채우기 — 일괄 조회(로그인 추가 없음) 우선, 못 채운 품목만 품목별 보충
-        self.after(0, lambda: self.status.set("입고단가 매칭 중…"))
-        fetched: dict[str, float] = {}
-        # 2-a) 같은 세션으로 일괄 조회 시도(성공 시 로그인 1회로 끝)
-        try:
-            allp = client.get_all_prices()
-        except EcountApiError:
-            allp = {}
-        if allp:
-            fetched = {c: allp[c] for c in inv_codes if c in allp}
-
-        # 2-b) 일괄에서 못 받은(또는 일괄 실패) 품목만 품목별로 보충 → 매칭 누락 방지
-        remaining = [c for c in inv_codes if c not in cache and c not in fetched]
-        if remaining and getattr(self, "_query_seq", 0) == my_seq:
+        # 2) 캐시에 없는 품목코드만 품목별로 조회해 채우고 자동 갱신
+        missing = [c for c in inv_codes if c not in cache]
+        if missing and getattr(self, "_query_seq", 0) == my_seq:
             def prog(d, t):
                 self.after(0, lambda d=d, t=t: self.status.set(
                     f"입고단가 매칭 중… {d}/{t} (완료 후 자동 갱신)"))
             try:
-                extra = client.get_prices(
-                    remaining, progress=prog,
+                fetched = client.get_prices(
+                    missing, progress=prog,
                     should_stop=lambda: getattr(self, "_query_seq", 0) != my_seq)
             except EcountApiError:
-                extra = {}
-            fetched.update(extra)
-
-        if fetched and getattr(self, "_query_seq", 0) == my_seq:
-            cache.update(fetched)
-            save_price_cache(cache)
-            full_map = {c: cache[c] for c in inv_codes if c in cache}
-            new_all = cmp.build_inventory_display(rows, price_map=full_map)
-            self.after(0, self._prices_updated, rows, new_all, len(fetched))
+                fetched = {}
+            if fetched and getattr(self, "_query_seq", 0) == my_seq:
+                cache.update(fetched)
+                save_price_cache(cache)
+                full_map = {c: cache[c] for c in inv_codes if c in cache}
+                new_all = cmp.build_inventory_display(rows, price_map=full_map)
+                self.after(0, self._prices_updated, rows, new_all, len(fetched))
 
     def _query_failed(self, msg: str) -> None:
         self.btn_query.configure(state="normal")
