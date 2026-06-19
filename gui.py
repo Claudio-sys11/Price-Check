@@ -3328,27 +3328,27 @@ class App(tk.Tk):
         all_display = cmp.build_inventory_display(rows, price_map=price_map)
         self.after(0, self._query_done, data, rows, all_display, note)
 
-        # 2) 재고가 있는 품목 중 캐시에 없는 것만 품목별로 조회해 채우고 자동 갱신
+        # 2) 입고단가: 재고현황과 '같은 세션'으로 품목등록(IN_PRICE)을 1회 일괄 조회한다.
+        #    → 조회 1회당 EcountERP 로그인은 '1회'만 발생(품목별 재로그인 없음).
+        #    (재고 있는 품목 중 캐시에 없는 것만 채우면 충분)
         missing = [c for c in stock_codes if c not in cache]
         if missing and getattr(self, "_query_seq", 0) == my_seq:
-            self.after(0, self._start_match_progress, len(missing))
-            def prog(d, t):
-                self.after(0, self._set_match_progress, d, t)
+            self.after(0, self._start_match_progress, 0)   # 경과시간 표시(일괄)
             try:
-                fetched = client.get_prices(
-                    missing, progress=prog,
-                    should_stop=lambda: getattr(self, "_query_seq", 0) != my_seq)
+                allp = client.get_all_prices()   # 로그인된 세션 재사용(추가 로그인 없음)
             except EcountApiError:
-                fetched = {}
+                allp = {}
+            fetched = {c: allp[c] for c in missing if c in allp}
+            nonzero = sum(1 for v in fetched.values() if v and v > 0)
             self.after(0, self._stop_match_progress, len(fetched), len(missing))
-            if fetched and getattr(self, "_query_seq", 0) == my_seq:
+            if fetched and nonzero and getattr(self, "_query_seq", 0) == my_seq:
                 cache.update(fetched)
                 save_price_cache(cache)
                 full_map = {c: cache[c] for c in inv_codes if c in cache}
                 new_all = cmp.build_inventory_display(rows, price_map=full_map)
                 self.after(0, self._prices_updated, rows, new_all, len(fetched))
-            elif not fetched and getattr(self, "_query_seq", 0) == my_seq:
-                # 한 건도 매칭 못 함 → 실제 원인을 진단해 사용자에게 안내
+            elif getattr(self, "_query_seq", 0) == my_seq:
+                # 일괄 조회가 입고단가를 돌려주지 못함 → 실제 원인 진단(이때만 추가 1회 로그인)
                 try:
                     diag = client.diagnose_price(missing[0])
                 except Exception as exc:   # noqa: BLE001
@@ -3380,10 +3380,13 @@ class App(tk.Tk):
         el = int(time.time() - getattr(self, "_match_t0", time.time()))
         t = getattr(self, "_match_total", 0) or 0
         d = getattr(self, "_match_done", 0) or 0
-        pct = round(d * 100 / t) if t else 0
         mm, ss = divmod(el, 60)
-        self.status.set(
-            f"입고단가 매칭 중… {pct}% ({d:,}/{t:,}) · 경과 {mm}:{ss:02d} (완료 후 자동 갱신)")
+        if t:
+            pct = round(d * 100 / t)
+            self.status.set(
+                f"입고단가 매칭 중… {pct}% ({d:,}/{t:,}) · 경과 {mm}:{ss:02d} (완료 후 자동 갱신)")
+        else:   # 일괄 조회(건수 미지정): 경과시간만 표시(멈춤/진행 구분용)
+            self.status.set(f"입고단가 매칭 중… 일괄 조회 · 경과 {mm}:{ss:02d}")
         self._match_job = self.after(1000, self._match_tick)
 
     def _stop_match_progress(self, n_fetched: int = 0, total: int = 0) -> None:
@@ -3407,11 +3410,13 @@ class App(tk.Tk):
         if info.get("ok"):
             pmsg.showinfo(
                 "입고단가 진단",
-                f"품목 '{code}' 조회는 성공했습니다(입고단가={info.get('in_price')}).\n"
-                f"응답 필드: {', '.join(info.get('row_keys', [])[:20])}\n\n"
-                "조회는 되는데 매칭이 0건이라면 품목코드 형식 차이일 수 있습니다.\n"
-                "이 화면을 캡처해 알려주시면 매칭 규칙을 맞추겠습니다.")
-            self.status.set("입고단가 조회는 성공(매칭 규칙 점검 필요)")
+                f"품목 '{code}'는 '품목별 조회'로는 입고단가({info.get('in_price')})가 "
+                "정상 확인됩니다.\n"
+                "다만 로그인 1회짜리 '일괄 조회'로는 단가가 오지 않습니다"
+                "(EcountERP 목록 응답에 원가 미포함).\n\n"
+                "→ 이 화면을 캡처해 알려주시면, '로그인 1회 유지'와 '정확한 단가 매칭' 중\n"
+                "  어느 쪽을 우선할지에 맞춰 마무리하겠습니다.")
+            self.status.set("입고단가: 일괄 조회로는 단가 미수신(품목별은 정상)")
             return
         status = info.get("status")
         message = str(info.get("message", ""))
