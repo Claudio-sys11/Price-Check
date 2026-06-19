@@ -1425,6 +1425,59 @@ class App(tk.Tk):
                       "이 기능을 사용하세요.\n"
                       "다음 조회 때 품목등록에서 최신 입고단가를 다시 받아옵니다.")
 
+    def _import_price_file(self) -> None:
+        """EcountERP 품목 내보내기 파일(CSV/Excel)을 불러와 입고단가 캐시에 반영.
+
+        접속(API) 없이 입고단가를 매칭하기 위한 기능. 파일에서 {품목코드: 입고단가}를
+        읽어 캐시에 합치면, 이후 재고현황 조회는 접속 1회(재고)만으로 매칭된다.
+        """
+        path = filedialog.askopenfilename(
+            title="입고단가 파일 선택 (품목코드·입고단가 포함 CSV/Excel)",
+            filetypes=[("CSV/Excel", "*.csv *.xlsx *.xlsm *.xls"),
+                       ("CSV 파일", "*.csv"), ("Excel 파일", "*.xlsx *.xlsm *.xls"),
+                       ("모든 파일", "*.*")])
+        if not path:
+            return
+        self.status.set("입고단가 파일 불러오는 중…")
+
+        def work():
+            try:
+                pmap = cmp.parse_price_file(path)
+                err = None
+            except Exception as exc:   # noqa: BLE001
+                pmap, err = {}, exc
+
+            def done():
+                if err:
+                    self.status.set("입고단가 파일 불러오기 실패")
+                    pmsg.showerror("불러오기 실패", f"파일을 읽지 못했습니다.\n\n{err}")
+                    return
+                if not pmap:
+                    self.status.set("입고단가 파일: 컬럼 인식 실패")
+                    pmsg.showwarning(
+                        "불러오기",
+                        "파일에서 '품목코드'와 '입고단가' 컬럼을 찾지 못했습니다.\n"
+                        "EcountERP 품목 목록을 머리글 포함 CSV/Excel로 내보냈는지 확인해 주세요.")
+                    return
+                cache = load_price_cache()
+                cache.update(pmap)
+                save_price_cache(cache)
+                self.status.set(f"입고단가 {len(pmap):,}건 불러옴 (접속 없이 매칭)")
+                # 이미 재고현황을 조회해 둔 상태면 즉시 재매칭해 표시
+                if getattr(self, "_inventory_rows", None):
+                    code_f = (cmp.detect_ecount_fields(self._inventory_rows)
+                              .get("품목코드") or "PROD_CD")
+                    inv_codes = [str(r.get(code_f, "")).strip() for r in self._inventory_rows]
+                    full = {c: cache[c] for c in inv_codes if c and c in cache}
+                    new_all = cmp.build_inventory_display(self._inventory_rows, price_map=full)
+                    self._prices_updated(self._inventory_rows, new_all, len(full))
+                pmsg.showinfo(
+                    "불러오기 완료",
+                    f"{len(pmap):,}건의 입고단가를 불러왔습니다.\n"
+                    "이제 재고현황 조회 시 접속 없이 입고단가가 매칭됩니다.")
+            self.after(0, done)
+        threading.Thread(target=work, daemon=True).start()
+
     # ================= 로그인 / 회원가입 / 사용자 관리 =================
     def _center_window(self, win, w: int, h: int) -> None:
         win.update_idletasks()
@@ -2496,6 +2549,14 @@ class App(tk.Tk):
         self.btn_sub_csv = gray_button(btns, "소계/평균만 내보내기", self._export_subtotals)
         self.btn_sub_csv.configure(state="disabled")
         self.btn_sub_csv.pack(side="left")
+        self.btn_import_price = gray_button(btns, "📄  입고단가 파일 불러오기",
+                                            self._import_price_file)
+        self.btn_import_price.pack(side="left", padx=8)
+        self._attach_tooltip(
+            self.btn_import_price,
+            "EcountERP에서 내보낸 품목 파일(CSV/Excel, 1만건 이상 가능)을 불러와\n"
+            "접속 없이 입고단가를 매칭합니다.\n"
+            "파일에 '품목코드'와 '입고단가' 컬럼이 있으면 자동 인식합니다.")
         self.btn_clear_cache = gray_button(btns, "🗑  캐시 비우기", self._clear_price_cache)
         self.btn_clear_cache.pack(side="left", padx=8)
         self._attach_tooltip(

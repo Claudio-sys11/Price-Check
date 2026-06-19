@@ -375,6 +375,91 @@ def detect_ecount_fields(rows: list[dict]) -> dict[str, str | None]:
     }
 
 
+def parse_price_file(path: str) -> dict[str, float]:
+    """EcountERP 품목 내보내기 파일(CSV/Excel)에서 {품목코드: 입고단가} 를 추출한다.
+
+    접속(API) 없이, 사용자가 EcountERP에서 내보낸 품목 목록 파일을 직접 불러와
+    입고단가를 매칭하기 위한 용도(1만건 이상 대용량 지원).
+    헤더 행을 자동 감지하여 '품목코드' 와 '입고단가' 컬럼을 찾는다.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    rows: list[list[Any]] = []
+    if ext in (".xlsx", ".xlsm", ".xls"):
+        import openpyxl
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        ws = wb.active
+        for r in ws.iter_rows(values_only=True):
+            rows.append(list(r))
+        wb.close()
+    else:   # CSV (인코딩 자동 판별)
+        text_rows = None
+        for enc in ("utf-8-sig", "cp949", "euc-kr", "utf-8"):
+            try:
+                with open(path, encoding=enc, newline="") as f:
+                    text_rows = list(csv.reader(f))
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        if text_rows is None:
+            raise ValueError("CSV 인코딩을 인식할 수 없습니다(UTF-8/CP949).")
+        rows = text_rows
+
+    if not rows:
+        return {}
+
+    # 헤더 행 찾기: 품목코드 후보 + 단가 후보가 모두 있는 행(상단 20행 내)
+    def has_any(cells, cands):
+        low = [str(c).lower() for c in cells]
+        return any(any(cd.lower() in c for c in low) for cd in cands)
+
+    hdr_idx, headers = None, None
+    for i, r in enumerate(rows[:20]):
+        cells = [str(c).strip() if c is not None else "" for c in r]
+        if has_any(cells, _CODE_CANDIDATES) and has_any(cells, _PRICE_CANDIDATES):
+            hdr_idx, headers = i, cells
+            break
+    if hdr_idx is None:
+        return {}
+
+    def find_code_col(hs):
+        for j, h in enumerate(hs):     # 정확/부분일치 (품목코드 우선)
+            if "품목코드" in h or h.upper() in ("PROD_CD", "PRODCD"):
+                return j
+        for cand in _CODE_CANDIDATES:
+            for j, h in enumerate(hs):
+                if cand.lower() in h.lower():
+                    return j
+        return None
+
+    def find_price_col(hs):
+        # 1) '입고단가' / IN_PRICE 우선
+        for j, h in enumerate(hs):
+            if ("입고" in h and ("단가" in h or "가" in h)) or h.upper() == "IN_PRICE":
+                return j
+        # 2) 일반 단가/원가(판매·출고 제외)
+        for j, h in enumerate(hs):
+            if (("단가" in h) or ("원가" in h) or ("cost" in h.lower())) \
+                    and ("판매" not in h) and ("출고" not in h):
+                return j
+        return None
+
+    c_code = find_code_col(headers)
+    c_price = find_price_col(headers)
+    if c_code is None or c_price is None:
+        return {}
+
+    out: dict[str, float] = {}
+    for r in rows[hdr_idx + 1:]:
+        if not r or c_code >= len(r) or r[c_code] is None:
+            continue
+        code = str(r[c_code]).strip()
+        if not code:
+            continue
+        price = _to_number(r[c_price]) if c_price < len(r) else 0.0
+        out[code] = price
+    return out
+
+
 def load_wizfasta(path: str) -> list[dict[str, Any]]:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
