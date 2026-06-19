@@ -200,7 +200,37 @@ class EcountClient:
             raise EcountApiError("로그인 실패(SESSION_ID 없음)")
         return sess, sid
 
-    # ---- 5) 품목코드별 입고단가 조회 (품목등록 IN_PRICE, 개별 매칭) -------
+    # ---- 5) 입고단가 일괄 조회 (단일 세션 1회, 추가 로그인 없음) ----------
+    def get_all_prices(self) -> dict[str, float]:
+        """현재 세션으로 품목등록(GetBasicProductsList)을 '한 번' 조회해
+        {품목코드: 입고단가(IN_PRICE)} 전체를 반환한다(재고현황 조회의 로그인 세션 재사용).
+
+        주의: 빈 조건 조회는 첫 10000건까지만 반환(페이지네이션 없음).
+        """
+        if not self.session_id:
+            self.login()
+        url = (
+            f"{self._base_url(with_zone=True)}"
+            f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={self.session_id}"
+        )
+        try:
+            resp = self._session.post(url, json={}, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise EcountApiError(f"네트워크 오류: {exc}") from exc
+        if resp.status_code != 200:
+            raise EcountApiError(f"입고단가 조회 실패: HTTP {resp.status_code}")
+        try:
+            rows = ((resp.json().get("Data") or {}).get("Result")) or []
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise EcountApiError(f"입고단가 응답 파싱 실패: {exc}") from exc
+        out: dict[str, float] = {}
+        for r in rows:
+            code = str(r.get("PROD_CD", "")).strip()
+            if code and code not in out:
+                out[code] = _num(r.get("IN_PRICE"))
+        return out
+
+    # ---- 6) 품목코드별 입고단가 조회 (품목등록 IN_PRICE, 개별 매칭) -------
     def get_prices(self, codes, progress=None, per_session: int = 2,
                    should_stop=None, workers: int = 4,
                    max_attempts: int = 8) -> dict[str, float]:

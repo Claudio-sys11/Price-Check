@@ -3257,12 +3257,12 @@ class App(tk.Tk):
             if not payload.get("BASE_DATE"):
                 payload["BASE_DATE"] = date.today().strftime("%Y%m%d")
             client.get_zone()
-            client.login()  # 한 번만 로그인 (이후 엔드포인트 재시도에 세션 재사용)
+            client.login()  # EcountERP 로그인은 조회당 '1회'만 (이후 모든 호출에 세션 재사용)
         except EcountApiError as exc:
-            self.after(0, self._query_failed, str(exc))
+            self.after(0, self._login_failed, str(exc))   # 로그인 실패 → 중단 + 설정 안내
             return
         except Exception as exc:  # noqa: BLE001
-            self.after(0, self._query_failed, f"예기치 못한 오류: {exc}")
+            self.after(0, self._login_failed, f"예기치 못한 오류: {exc}")
             return
 
         note = ""
@@ -3280,7 +3280,7 @@ class App(tk.Tk):
                 self.after(0, self._query_failed, str(exc2))
                 return
 
-        # 입고단가: 품목코드별로 품목등록(IN_PRICE)을 개별 조회해 매칭(캐시 활용)
+        # 입고단가: 같은 세션으로 품목등록(IN_PRICE)을 '1회' 일괄 조회(추가 로그인 없음)
         code_f = cmp.detect_ecount_fields(rows).get("품목코드") or "PROD_CD"
         inv_codes = list(dict.fromkeys(
             str(r.get(code_f, "")).strip() for r in rows if str(r.get(code_f, "")).strip()))
@@ -3291,19 +3291,15 @@ class App(tk.Tk):
         all_display = cmp.build_inventory_display(rows, price_map=price_map)
         self.after(0, self._query_done, data, rows, all_display, note)
 
-        # 2) 누락된 품목코드 입고단가를 백그라운드로 받아 채우고 자동 갱신
-        missing = [c for c in inv_codes if c not in cache]
-        if missing:
-            def prog(d, t):
-                self.after(0, lambda d=d, t=t: self.status.set(
-                    f"입고단가 매칭 중… {d}/{t} (완료 후 자동 갱신)"))
-            try:
-                fetched = client.get_prices(
-                    missing, progress=prog,
-                    should_stop=lambda: getattr(self, "_query_seq", 0) != my_seq)
-            except EcountApiError:
-                fetched = {}
-            if fetched and getattr(self, "_query_seq", 0) == my_seq:
+        # 2) 입고단가 일괄 조회(단일 세션 1회) 후 갱신 — 로그인 추가 없음
+        self.after(0, lambda: self.status.set("입고단가 매칭 중…"))
+        try:
+            allp = client.get_all_prices()
+        except EcountApiError:
+            allp = {}
+        if allp and getattr(self, "_query_seq", 0) == my_seq:
+            fetched = {c: allp[c] for c in inv_codes if c in allp}
+            if fetched:
                 cache.update(fetched)
                 save_price_cache(cache)
                 full_map = {c: cache[c] for c in inv_codes if c in cache}
@@ -3314,6 +3310,17 @@ class App(tk.Tk):
         self.btn_query.configure(state="normal")
         self.status.set("실패")
         pmsg.showerror("조회 실패", msg)
+
+    def _login_failed(self, msg: str) -> None:
+        """EcountERP 로그인 실패 → 작업 중단 + 설정 재확인 안내 팝업."""
+        self.btn_query.configure(state="normal")
+        self.status.set("로그인 실패 — 인증 정보 설정을 확인하세요")
+        if pmsg.askyesno(
+                "EcountERP 로그인 실패",
+                "EcountERP 로그인에 실패하여 작업을 중단했습니다.\n"
+                "인증 정보(API 인증키 등) 설정을 다시 확인해 주세요.\n\n"
+                f"사유: {msg}\n\n지금 [인증 정보 설정] 창을 열까요?"):
+            self._open_settings()
 
     def _query_done(self, data: dict, rows: list[dict],
                     all_display: list[dict], product_note: str = "") -> None:
