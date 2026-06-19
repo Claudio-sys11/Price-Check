@@ -3301,18 +3301,30 @@ class App(tk.Tk):
         #   주의: 빈 조건 일괄 조회는 EcountERP 목록에서 IN_PRICE 를 0/빈값으로 주는 경우가
         #   있어 신뢰할 수 없다 → '품목코드 지정' 조회만 정확한 입고단가를 돌려주므로
         #   품목별 조회(병렬+재시도)로만 매칭한다.
-        code_f = cmp.detect_ecount_fields(rows).get("품목코드") or "PROD_CD"
+        #   또한 '재고가 있는(재고수량>0)' 품목만 조회해 조회량·레이트리밋(412)을 줄인다.
+        fields = cmp.detect_ecount_fields(rows)
+        code_f = fields.get("품목코드") or "PROD_CD"
+        qty_f = fields.get("재고수량")
         inv_codes = list(dict.fromkeys(
             str(r.get(code_f, "")).strip() for r in rows if str(r.get(code_f, "")).strip()))
+        # 품목코드별 재고수량 합계(여러 창고 합산) → 재고 있는 품목만 추림
+        qty_by_code: dict[str, float] = {}
+        if qty_f:
+            for r in rows:
+                c = str(r.get(code_f, "")).strip()
+                if c:
+                    qty_by_code[c] = qty_by_code.get(c, 0.0) + cmp._to_number(r.get(qty_f))
+        stock_codes = ([c for c in inv_codes if qty_by_code.get(c, 0.0) > 0]
+                       if qty_f else inv_codes)
         cache = load_price_cache()
 
-        # 1) 우선 캐시에 있는 입고단가로 즉시 표시
+        # 1) 우선 캐시에 있는 입고단가로 즉시 표시(표시는 전체 품목 대상)
         price_map = {c: cache[c] for c in inv_codes if c in cache}
         all_display = cmp.build_inventory_display(rows, price_map=price_map)
         self.after(0, self._query_done, data, rows, all_display, note)
 
-        # 2) 캐시에 없는 품목코드만 품목별로 조회해 채우고 자동 갱신
-        missing = [c for c in inv_codes if c not in cache]
+        # 2) 재고가 있는 품목 중 캐시에 없는 것만 품목별로 조회해 채우고 자동 갱신
+        missing = [c for c in stock_codes if c not in cache]
         if missing and getattr(self, "_query_seq", 0) == my_seq:
             def prog(d, t):
                 self.after(0, lambda d=d, t=t: self.status.set(
