@@ -3053,6 +3053,9 @@ class App(tk.Tk):
             self._render_compare()
 
     def _on_cmp_filter_change(self, event=None) -> None:
+        self._debounce("cmp_filter", 220, self._apply_cmp_filter)
+
+    def _apply_cmp_filter(self) -> None:
         if getattr(self, "_compare_rows_all", []):
             self._render_compare()
 
@@ -3440,8 +3443,22 @@ class App(tk.Tk):
         g["_grand"] = True
         return g
 
+    def _debounce(self, key: str, delay: int, func) -> None:
+        """입력 중 과도한 재렌더를 막기 위해 마지막 입력 후 delay(ms) 한 번만 실행."""
+        jobs = self.__dict__.setdefault("_debounce_jobs", {})
+        prev = jobs.get(key)
+        if prev:
+            try:
+                self.after_cancel(prev)
+            except Exception:   # noqa: BLE001
+                pass
+        jobs[key] = self.after(delay, func)
+
     def _on_filter_change(self, event=None) -> None:
-        """조회조건(브랜드/모델명) 변경 시: 이미 받아온 데이터에서 즉시 재필터(재조회 없음)."""
+        """조회조건(브랜드/모델명) 입력 시: 입력이 멈춘 뒤 재필터(타이핑 지연 방지)."""
+        self._debounce("inv_filter", 220, self._apply_inv_filter)
+
+    def _apply_inv_filter(self) -> None:
         if getattr(self, "_inventory_display_all", []):
             self._render_inventory()
 
