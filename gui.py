@@ -1044,6 +1044,7 @@ class App(tk.Tk):
         self.geometry(f"{sc(1120)}x{sc(720)}")
         self.minsize(sc(940), sc(600))
         self.configure(bg=BG)
+        self.protocol("WM_DELETE_WINDOW", self._on_app_close)  # 종료 시 자동 로그아웃
 
         # 로딩 화면(스플래시) — 메인은 준비될 때까지 숨김
         self.withdraw()
@@ -1771,6 +1772,22 @@ class App(tk.Tk):
         self._switch_tab("inv")
         self._draw_header()   # 헤더에 사용자/로그아웃 표시
         self._start_daily_scheduler()   # 23:00 자동 확정 점검 시작
+
+    def _on_app_close(self) -> None:
+        """프로그램 종료(X) 시: 로그인 세션을 해제(자동 로그아웃)하고 닫는다.
+
+        세션(_auth)을 비워 다음 실행 때 반드시 다시 로그인하도록 한다.
+        (저장된 '아이디/비밀번호 기억' 값은 사용자가 선택한 편의 기능이므로 유지)
+        """
+        self._auth = None
+        try:
+            self._stop_daily_scheduler()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.destroy()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _logout(self) -> None:
         """로그아웃 → 메인 숨기고 로그인 팝업을 다시 띄운다."""
@@ -3654,9 +3671,19 @@ class App(tk.Tk):
         except Exception:   # noqa: BLE001
             pass
         try:
-            self.after(60000, self._daily_tick)   # 1분마다 점검
+            self._daily_job = self.after(60000, self._daily_tick)   # 1분마다 점검
         except Exception:   # noqa: BLE001
             pass
+
+    def _stop_daily_scheduler(self) -> None:
+        job = getattr(self, "_daily_job", None)
+        if job:
+            try:
+                self.after_cancel(job)
+            except Exception:   # noqa: BLE001
+                pass
+            self._daily_job = None
+        self._daily_sched_started = False
 
     def _finalize_today(self, today: str) -> None:
         if not backend.backend_enabled():
