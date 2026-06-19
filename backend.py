@@ -492,6 +492,8 @@ def finalize_daily(date_str: str, retries: int = 4):
             latest = dict(max(same, key=lambda h: h.get("time", "")))
             latest["time"] = "23:00"
             latest["final"] = True
+            latest["by"] = "system"        # 23:00 자동 확정 → 조회자: 시스템
+            latest["by_name"] = "시스템"
             hist = [h for h in hist if h.get("date") != date_str]
             hist.append(latest)
             hist.sort(key=lambda h: (h.get("date", ""), h.get("time", "")))
@@ -526,6 +528,8 @@ def finalize_old_days(today_str: str, retries: int = 4) -> bool:
                     latest = dict(max(recs, key=lambda h: h.get("time", "")))
                     latest["time"] = "23:00"
                     latest["final"] = True
+                    latest["by"] = "system"        # 자동 확정 → 조회자: 시스템
+                    latest["by_name"] = "시스템"
                     new_hist.append(latest)
                     changed = True
                 else:
