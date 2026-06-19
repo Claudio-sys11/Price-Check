@@ -34,7 +34,8 @@ DEFAULT_GITHUB_REPO = "Claudio-sys11/Price-Check"   # 자동 업데이트 기본
 # 인증 정보 고정값
 FIXED_COM_CODE = "188894"          # 회사코드(고정·수정 불가)
 FIXED_USER_ID = "THEFEELKOREA"     # 사용자ID(고정·수정 불가)
-DEFAULT_API_CERT_KEY = "28ac7027d054c443cb50b538fc5063f058"   # API 인증키(기본값·수정 가능)
+DEFAULT_API_CERT_KEY = "2b4a6569451a84b93aa0548bd0ad0ef428"   # API 인증키(기본값·수정 가능)
+_OLD_API_CERT_KEYS = {"28ac7027d054c443cb50b538fc5063f058"}    # 이전 기본 키(저장돼 있으면 새 키로 갱신)
 
 
 def resource_path(rel: str) -> str:
@@ -3149,7 +3150,11 @@ class App(tk.Tk):
         # 회사코드·사용자ID는 고정값(저장값 무시), API 인증키는 저장값 우선·없으면 기본값
         self.var_com.set(FIXED_COM_CODE)
         self.var_user.set(FIXED_USER_ID)
-        self.var_key.set(cfg.get("API_CERT_KEY") or DEFAULT_API_CERT_KEY)
+        saved_key = cfg.get("API_CERT_KEY") or ""
+        # 비어 있거나 이전 기본 키가 저장돼 있으면 새 기본 키로 갱신
+        if (not saved_key) or (saved_key in _OLD_API_CERT_KEYS):
+            saved_key = DEFAULT_API_CERT_KEY
+        self.var_key.set(saved_key)
         self.var_env.set(cfg.get("ENV", "production"))
         self._update_url = cfg.get("update_url", "")
         self.var_github.set(cfg.get("github_repo", "") or DEFAULT_GITHUB_REPO)
