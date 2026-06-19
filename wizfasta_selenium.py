@@ -98,8 +98,14 @@ return 'clicked';
 _GRID_EXTRACT_JS = r"""
 var g=window.whus_data&&window.whus_data.grid;
 if(!g||!g.length) return '[]';
+function midcat(r){
+  var cands=['Ppm_MCls_Nm','Ppm_M_Cls_Nm','Ppm_Mid_Cls_Nm','Ppm_MCate_Nm','중분류'];
+  for(var i=0;i<cands.length;i++){ if(r[cands[i]]!=null&&r[cands[i]]!=='') return r[cands[i]]; }
+  for(var k in r){ if(/(중분류)|(m_?cls.*nm)|(mid.*cls)|(m_?cate.*nm)/i.test(k)&&r[k]!=null&&r[k]!=='') return r[k]; }
+  return '';
+}
 return JSON.stringify(g.map(function(r){return {모델명:r.Ppm_Mdl_Nm, 브랜드:r.Ppm_Bnd_Nm,
-  원가:r.Ppm_Cost, 재고:r.Lim_Cpter_Stock_Qty};}));
+  원가:r.Ppm_Cost, 재고:r.Lim_Cpter_Stock_Qty, 중분류:midcat(r), 기준판매가:r.Ppm_Std_Sell_Amt};}));
 """
 
 
@@ -132,6 +138,8 @@ def _parse_xlsx(path: str) -> list[dict]:
     c_cost = col(lambda h: ("원가" in h) and ("판매" not in h))
     c_brand = col(lambda h: "브랜드" in h)
     c_stock = col(lambda h: ("재고" in h))
+    c_midcat = col(lambda h: "중분류" in h)        # 상품DB 중분류 컬럼
+    c_stdprice = col(lambda h: "기준판매" in h)    # 기준판매가 컬럼
 
     out = []
     for r in rows[hdr_idx + 1:]:
@@ -145,6 +153,8 @@ def _parse_xlsx(path: str) -> list[dict]:
             "브랜드": (str(r[c_brand]).strip() if c_brand is not None and c_brand < len(r) and r[c_brand] is not None else ""),
             "원가": (r[c_cost] if c_cost is not None and c_cost < len(r) else 0),
             "재고": (r[c_stock] if c_stock is not None and c_stock < len(r) else ""),
+            "중분류": (str(r[c_midcat]).strip() if c_midcat is not None and c_midcat < len(r) and r[c_midcat] is not None else ""),
+            "기준판매가": (r[c_stdprice] if c_stdprice is not None and c_stdprice < len(r) else 0),
         })
     return out
 

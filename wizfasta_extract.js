@@ -16,10 +16,17 @@
     return;
   }
   var gd = window.whus_data.grid;
+  function midcat(r) {
+    var cands = ['Ppm_MCls_Nm', 'Ppm_M_Cls_Nm', 'Ppm_Mid_Cls_Nm', 'Ppm_MCate_Nm', '중분류'];
+    for (var i = 0; i < cands.length; i++) { if (r[cands[i]] != null && r[cands[i]] !== '') return r[cands[i]]; }
+    for (var k in r) { if (/(중분류)|(m_?cls.*nm)|(mid.*cls)|(m_?cate.*nm)/i.test(k) && r[k] != null && r[k] !== '') return r[k]; }
+    return '';
+  }
   var rows = gd.map(function (r) {
     return {
       품목코드: String(r.Mpm_Pr_Cd),
       브랜드: r.Ppm_Bnd_Nm,
+      중분류: midcat(r),
       모델명: r.Ppm_Mdl_Nm,
       판매상품명: r.Mpm_Mk_Pr_Nm,
       시즌: r.Ppm_Year_Ss_Cd,
