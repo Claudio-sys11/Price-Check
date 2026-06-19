@@ -65,6 +65,7 @@ class EcountClient:
 
         self.zone: str | None = None
         self.session_id: str | None = None
+        self.call_count = 0          # 이번 인스턴스가 보낸 EcountERP API 호출 수(일일 한도 집계용)
 
         # 로그인 시 발급되는 인증/라우팅 쿠키(ECOUNT_SessionId, SVID)를
         # 후속 데이터 호출에 자동 유지해야 한다. 이를 누락하면 로드밸런서가
@@ -77,6 +78,7 @@ class EcountClient:
         return f"https://{host}.ecount.com"
 
     def _post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.call_count += 1
         try:
             resp = self._session.post(url, json=payload, timeout=self.timeout)
         except requests.RequestException as exc:
@@ -192,6 +194,7 @@ class EcountClient:
             "COM_CODE": self.com_code, "USER_ID": self.user_id,
             "API_CERT_KEY": self.api_cert_key, "LAN_TYPE": self.lan_type, "ZONE": self.zone,
         }
+        self.call_count += 1
         resp = sess.post(url, json=payload, timeout=self.timeout)
         if resp.status_code != 200:
             raise EcountApiError(f"HTTP {resp.status_code}")
@@ -213,6 +216,7 @@ class EcountClient:
             f"{self._base_url(with_zone=True)}"
             f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={self.session_id}"
         )
+        self.call_count += 1
         try:
             resp = self._session.post(url, json={}, timeout=self.timeout)
         except requests.RequestException as exc:
@@ -327,6 +331,7 @@ class EcountClient:
                         stop[0] = True
                         break
                     ok = False
+                    self.call_count += 1
                     try:
                         resp = sess.post(url, json={"PROD_CD": code}, timeout=30)
                         if resp.status_code == 200:
@@ -374,6 +379,7 @@ class EcountClient:
             f"{self._base_url(with_zone=True)}"
             f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={sid}"
         )
+        self.call_count += 1
         try:
             resp = sess.post(url, json={"PROD_CD": code}, timeout=30)
             info["status"] = resp.status_code

@@ -509,7 +509,7 @@ def delete_daily(keys, retries: int = 4) -> int:
 
 
 def finalize_daily(date_str: str, retries: int = 4):
-    """해당 날짜를 '23:00 최종' 1건으로 확정(그날 마지막 조회값 채택, 나머지 삭제)."""
+    """해당 날짜를 '00:01 최종' 1건으로 확정(그날 마지막 조회값 채택, 나머지 삭제)."""
     if not backend_enabled():
         return None
     last = None
@@ -521,9 +521,9 @@ def finalize_daily(date_str: str, retries: int = 4):
             if not same:
                 return None
             latest = dict(max(same, key=lambda h: h.get("time", "")))
-            latest["time"] = "23:00"
+            latest["time"] = "00:01"
             latest["final"] = True
-            latest["by"] = "system"        # 23:00 자동 확정 → 조회자: 시스템
+            latest["by"] = "system"        # 00:01 자동 확정 → 조회자: 시스템
             latest["by_name"] = "시스템"
             hist = [h for h in hist if h.get("date") != date_str]
             hist.append(latest)
@@ -538,9 +538,10 @@ def finalize_daily(date_str: str, retries: int = 4):
 
 
 def finalize_old_days(today_str: str, retries: int = 4) -> bool:
-    """today 이전 날짜 중 여러 기록이 남은 날을 각각 '23:00 최종' 1건으로 정리.
+    """today 이전 날짜 중 여러 기록이 남은 날을 각각 '00:01 최종' 1건으로 정리.
 
-    (앱이 23:00에 닫혀 있어 확정되지 못한 과거 날짜 보정). 변경이 있을 때만 저장.
+    (오늘 기록은 24:00까지 모두 보존하고, 자정이 지난 전일까지만 시스템이 1건으로
+    확정한다.) 변경이 있을 때만 저장.
     """
     if not backend_enabled():
         return False
@@ -557,7 +558,7 @@ def finalize_old_days(today_str: str, retries: int = 4) -> bool:
             for d, recs in bydate.items():
                 if d and d < today_str and len(recs) > 1:
                     latest = dict(max(recs, key=lambda h: h.get("time", "")))
-                    latest["time"] = "23:00"
+                    latest["time"] = "00:01"
                     latest["final"] = True
                     latest["by"] = "system"        # 자동 확정 → 조회자: 시스템
                     latest["by_name"] = "시스템"

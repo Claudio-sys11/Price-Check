@@ -174,6 +174,41 @@ def save_price_cache(cache: dict) -> None:
         pass
 
 
+# ===== EcountERP 일일 API 사용량(접속수) 집계 — 1일 최대 5000 =====
+API_USAGE_PATH = os.path.join(app_data_dir(), "api_usage.json")
+DAILY_API_LIMIT = 5000          # EcountERP 1일 최대 허용 호출 수
+EST_CALLS_PER_QUERY = 6         # 1회 조회 예상 호출 수(Zone+로그인+재고+폴백+단가+여유)
+
+
+def load_api_usage() -> dict:
+    """오늘자 EcountERP 호출 누적 사용량을 반환(날짜 바뀌면 0으로 리셋)."""
+    try:
+        with open(API_USAGE_PATH, encoding="utf-8") as f:
+            d = json.load(f) or {}
+    except (OSError, json.JSONDecodeError):
+        d = {}
+    today = time.strftime("%Y-%m-%d")
+    if d.get("date") != today:
+        d = {"date": today, "count": 0}
+    return d
+
+
+def get_today_api_calls() -> int:
+    return int(load_api_usage().get("count", 0))
+
+
+def add_api_calls(n: int) -> int:
+    """오늘자 사용량에 n건 누적(자정 지나면 자동 리셋). 누적 후 합계 반환."""
+    d = load_api_usage()
+    d["count"] = int(d.get("count", 0)) + max(0, int(n))
+    try:
+        with open(API_USAGE_PATH, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+    except OSError:
+        pass
+    return d["count"]
+
+
 DAILY_STATUS_PATH = os.path.join(app_data_dir(), "daily_status.json")
 
 
@@ -3252,6 +3287,18 @@ class App(tk.Tk):
         if not cfg["COM_CODE"] or not cfg["USER_ID"] or not cfg["API_CERT_KEY"]:
             pmsg.showwarning("입력 필요", "회사코드 / 사용자ID / API 인증키를 모두 입력하세요.")
             return
+        # EcountERP 일일 허용량(5,000건) 초과 예상 시: 현재 사용량 안내 후 진행 중단
+        used = get_today_api_calls()
+        if used + EST_CALLS_PER_QUERY > DAILY_API_LIMIT:
+            pmsg.showwarning(
+                "EcountERP 일일 한도 초과 방지",
+                f"오늘 EcountERP 사용량이 일일 허용량(5,000건)에 도달하여\n"
+                f"작업을 진행하지 않습니다.\n\n"
+                f"• 현재 사용량: {used:,}건 / 5,000건\n"
+                f"• 이번 조회 예상: 약 {EST_CALLS_PER_QUERY}건\n"
+                f"• 예상 합계: {used + EST_CALLS_PER_QUERY:,}건\n\n"
+                "자정이 지나면 사용량이 초기화됩니다. 내일 다시 시도해 주세요.")
+            return
         self._query_seq = getattr(self, "_query_seq", 0) + 1  # 새 조회 → 이전 백그라운드 가격조회 중단
         self.btn_query.configure(state="disabled")
         self.btn_inv_csv.configure(state="disabled")
@@ -3267,8 +3314,15 @@ class App(tk.Tk):
     RICH_EP = "/OAPI/V2/InventoryBalance/GetListInventoryBalanceStatusByLocation"
     BASIC_EP = "/OAPI/V2/InventoryBalance/GetListInventoryBalanceStatus"
 
+    def _record_api_usage(self, client) -> None:
+        """이번 조회가 보낸 EcountERP 호출 수를 오늘자 사용량에 누적."""
+        n = getattr(client, "call_count", 0) if client is not None else 0
+        if n:
+            add_api_calls(n)
+
     def _do_query(self, cfg: dict, my_seq: int = 0) -> None:
         from datetime import date
+        client = None
         try:
             client = EcountClient(
                 com_code=cfg["COM_CODE"], user_id=cfg["USER_ID"],
@@ -3281,9 +3335,11 @@ class App(tk.Tk):
             client.get_zone()
             client.login()  # EcountERP 로그인은 조회당 '1회'만 (이후 모든 호출에 세션 재사용)
         except EcountApiError as exc:
+            self._record_api_usage(client)
             self.after(0, self._login_failed, str(exc))   # 로그인 실패 → 중단 + 설정 안내
             return
         except Exception as exc:  # noqa: BLE001
+            self._record_api_usage(client)
             self.after(0, self._login_failed, f"예기치 못한 오류: {exc}")
             return
 
@@ -3299,6 +3355,7 @@ class App(tk.Tk):
                 data = client.get_inventory(endpoint=self.BASIC_EP, payload=payload)
                 rows = cmp.extract_ecount_rows(data)
             except EcountApiError as exc2:
+                self._record_api_usage(client)
                 self.after(0, self._query_failed, str(exc2))
                 return
 
@@ -3354,6 +3411,9 @@ class App(tk.Tk):
                 except Exception as exc:   # noqa: BLE001
                     diag = {"code": missing[0], "ok": False, "message": str(exc)}
                 self.after(0, self._show_price_diag, diag)
+
+        # 이번 조회가 사용한 EcountERP 호출 수를 오늘자 사용량에 누적(자정 리셋)
+        self._record_api_usage(client)
 
     # ---- 입고단가 매칭 진행 표시(경과시간 매초 갱신 + %) -----------------
     def _start_match_progress(self, total: int) -> None:
@@ -3778,9 +3838,12 @@ class App(tk.Tk):
         try:
             lt = time.localtime()
             today = time.strftime("%Y-%m-%d", lt)
-            if lt.tm_hour >= 23 and getattr(self, "_last_finalized", "") != today:
+            # 자정 직후(00:01~)에 '전일까지'를 시스템 최종 1건으로 정리한다.
+            # (오늘 기록은 00:01~24:00 동안 모두 보존되고, 다음날 00:01에 확정된다.)
+            if (lt.tm_hour == 0 and lt.tm_min >= 1
+                    and getattr(self, "_last_finalized", "") != today):
                 self._last_finalized = today
-                self._finalize_today(today)
+                self._finalize_prev_days(today)
         except Exception:   # noqa: BLE001
             pass
         try:
@@ -3798,12 +3861,13 @@ class App(tk.Tk):
             self._daily_job = None
         self._daily_sched_started = False
 
-    def _finalize_today(self, today: str) -> None:
+    def _finalize_prev_days(self, today: str) -> None:
+        """자정 직후: 전일까지(오늘 제외)를 시스템 최종 1건(00:01)으로 정리."""
         if not backend.backend_enabled():
             return
         def work():
             try:
-                backend.finalize_daily(today)
+                backend.finalize_old_days(today)
             except Exception:   # noqa: BLE001
                 pass
             self.after(0, self._render_daily)
