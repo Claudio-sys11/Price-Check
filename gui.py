@@ -3308,20 +3308,37 @@ class App(tk.Tk):
         all_display = cmp.build_inventory_display(rows, price_map=price_map)
         self.after(0, self._query_done, data, rows, all_display, note)
 
-        # 2) 입고단가 일괄 조회(단일 세션 1회) 후 갱신 — 로그인 추가 없음
+        # 2) 입고단가 채우기 — 일괄 조회(로그인 추가 없음) 우선, 못 채운 품목만 품목별 보충
         self.after(0, lambda: self.status.set("입고단가 매칭 중…"))
+        fetched: dict[str, float] = {}
+        # 2-a) 같은 세션으로 일괄 조회 시도(성공 시 로그인 1회로 끝)
         try:
             allp = client.get_all_prices()
         except EcountApiError:
             allp = {}
-        if allp and getattr(self, "_query_seq", 0) == my_seq:
+        if allp:
             fetched = {c: allp[c] for c in inv_codes if c in allp}
-            if fetched:
-                cache.update(fetched)
-                save_price_cache(cache)
-                full_map = {c: cache[c] for c in inv_codes if c in cache}
-                new_all = cmp.build_inventory_display(rows, price_map=full_map)
-                self.after(0, self._prices_updated, rows, new_all, len(fetched))
+
+        # 2-b) 일괄에서 못 받은(또는 일괄 실패) 품목만 품목별로 보충 → 매칭 누락 방지
+        remaining = [c for c in inv_codes if c not in cache and c not in fetched]
+        if remaining and getattr(self, "_query_seq", 0) == my_seq:
+            def prog(d, t):
+                self.after(0, lambda d=d, t=t: self.status.set(
+                    f"입고단가 매칭 중… {d}/{t} (완료 후 자동 갱신)"))
+            try:
+                extra = client.get_prices(
+                    remaining, progress=prog,
+                    should_stop=lambda: getattr(self, "_query_seq", 0) != my_seq)
+            except EcountApiError:
+                extra = {}
+            fetched.update(extra)
+
+        if fetched and getattr(self, "_query_seq", 0) == my_seq:
+            cache.update(fetched)
+            save_price_cache(cache)
+            full_map = {c: cache[c] for c in inv_codes if c in cache}
+            new_all = cmp.build_inventory_display(rows, price_map=full_map)
+            self.after(0, self._prices_updated, rows, new_all, len(fetched))
 
     def _query_failed(self, msg: str) -> None:
         self.btn_query.configure(state="normal")

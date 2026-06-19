@@ -226,8 +226,13 @@ class EcountClient:
         out: dict[str, float] = {}
         for r in rows:
             code = str(r.get("PROD_CD", "")).strip()
-            if code and code not in out:
-                out[code] = _num(r.get("IN_PRICE"))
+            if not code or code in out:
+                continue
+            # 일괄(목록) 응답에 입고단가 필드가 없으면 확정하지 않고 건너뛴다
+            # → 호출측에서 해당 품목만 품목별 조회로 보충(매칭 누락 방지).
+            if "IN_PRICE" not in r or r.get("IN_PRICE") in (None, ""):
+                continue
+            out[code] = _num(r.get("IN_PRICE"))
         return out
 
     # ---- 6) 품목코드별 입고단가 조회 (품목등록 IN_PRICE, 개별 매칭) -------
