@@ -355,6 +355,45 @@ class EcountClient:
             t.join()
         return result
 
+    def diagnose_price(self, code: str) -> dict[str, Any]:
+        """단일 품목코드로 품목등록(GetBasicProductsList)을 1회 조회해 진단 정보를 반환한다.
+
+        입고단가 매칭이 0건일 때 '왜 안 되는지'(권한 없음/412/구조 변경 등)를
+        실제 응답에서 확인하기 위한 용도.
+        """
+        info: dict[str, Any] = {
+            "code": code, "ok": False, "status": None,
+            "message": "", "raw": "", "in_price": None, "row_keys": [],
+        }
+        try:
+            sess, sid = self._login_fresh()
+        except Exception as exc:   # noqa: BLE001
+            info["message"] = f"로그인 실패: {exc}"
+            return info
+        url = (
+            f"{self._base_url(with_zone=True)}"
+            f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={sid}"
+        )
+        try:
+            resp = sess.post(url, json={"PROD_CD": code}, timeout=30)
+            info["status"] = resp.status_code
+            info["raw"] = resp.text[:800]
+            if resp.status_code == 200:
+                data = resp.json()
+                rows = ((data.get("Data") or {}).get("Result")) or []
+                msg = self._error_message(data) if not rows else ""
+                if rows:
+                    info["ok"] = True
+                    info["in_price"] = rows[0].get("IN_PRICE")
+                    info["row_keys"] = list(rows[0].keys())
+                else:
+                    info["message"] = msg or "응답에 품목 데이터(Result)가 없습니다."
+            else:
+                info["message"] = f"HTTP {resp.status_code}"
+        except Exception as exc:   # noqa: BLE001
+            info["message"] = f"요청 오류: {exc}"
+        return info
+
     @staticmethod
     def _error_message(data: dict[str, Any]) -> str:
         """EcountERP 응답에서 사람이 읽을 에러 메시지를 추출한다."""

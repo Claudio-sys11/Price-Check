@@ -477,6 +477,37 @@ def record_daily(record: dict, retries: int = 4) -> None:
         raise last
 
 
+def delete_daily(keys, retries: int = 4) -> int:
+    """일일현황에서 지정한 (날짜, 시각) 레코드를 삭제한다(관리자 전용).
+
+    keys: [(date, time), ...]. 매칭되는 모든 레코드를 한 번에 삭제하고
+    삭제된 건수를 반환한다. 충돌(409) 시 재시도.
+    """
+    if not backend_enabled():
+        raise BackendError("백엔드가 설정되지 않았습니다.")
+    keyset = {(str(d), str(t)) for d, t in keys}
+    if not keyset:
+        return 0
+    last = None
+    for _ in range(max(1, retries)):
+        try:
+            data, sha = _get_file(DAILY_PATH)
+            hist = data if isinstance(data, list) else []
+            new_hist = [h for h in hist
+                        if (str(h.get("date", "")), str(h.get("time", ""))) not in keyset]
+            removed = len(hist) - len(new_hist)
+            if removed == 0:
+                return 0
+            _put_file(DAILY_PATH, new_hist, sha, f"delete daily {removed}")
+            return removed
+        except BackendError as e:
+            last = e                  # 409 등 충돌 → sha 다시 받아 재시도
+            time.sleep(0.6)
+    if last:
+        raise last
+    return 0
+
+
 def finalize_daily(date_str: str, retries: int = 4):
     """해당 날짜를 '23:00 최종' 1건으로 확정(그날 마지막 조회값 채택, 나머지 삭제)."""
     if not backend_enabled():

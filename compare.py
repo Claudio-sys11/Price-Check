@@ -281,7 +281,6 @@ def build_cost_comparison(
             "브랜드": w.get("브랜드", ""),
             "중분류": str(w.get("중분류", "") or ""),
             "모델명": w.get("모델명", ""),
-            "기준판매가": f"{int(round(_to_number(w.get('기준판매가')))):,}",
             "파스타원가": f"{int(round(wiz_cost)):,}",
             "평균원가(ERP)": (f"{int(round(ec_price)):,}" if matched else ""),
             "차이": (f"{int(round(diff)):,}" if diff is not None else ""),

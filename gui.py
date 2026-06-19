@@ -131,7 +131,7 @@ UNMATCH_BG = "#eef1f4"         # 가격비교: 미매칭 행
 UNMATCH_FG = "#6b7280"
 
 MONEY_COLS = {"입고단가", "총단가",
-              "파스타원가", "기준판매가", "평균원가(ERP)", "차이",
+              "파스타원가", "평균원가(ERP)", "차이",
               "파스타재고", "실재고(ERP)", "재고차이"}  # 우측정렬(금액·수량) 컬럼
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"   # 실시간 활동 스피너
@@ -2765,6 +2765,11 @@ class App(tk.Tk):
                 ("전체 복사 (머리글 포함)",
                  lambda: self._copy_rows(tree, all_rows=True, header=True)),
             ]
+            # 관리자 전용: 일일현황 표에서 선택 행 개별 삭제
+            if (tree is getattr(self, "tree_daily", None)
+                    and (self._auth or {}).get("role") == "admin"):
+                items.append(("🗑  선택 행 삭제(관리자)",
+                              lambda: self._delete_daily_rows(tree)))
             # 검증된 둥근 드롭다운을 커서 위치에 띄움(클릭 즉시 동작)
             self._rounded_dropdown(None, items, lambda cmd: cmd(),
                                    at=(e.x_root, e.y_root))
@@ -3342,6 +3347,13 @@ class App(tk.Tk):
                 full_map = {c: cache[c] for c in inv_codes if c in cache}
                 new_all = cmp.build_inventory_display(rows, price_map=full_map)
                 self.after(0, self._prices_updated, rows, new_all, len(fetched))
+            elif not fetched and getattr(self, "_query_seq", 0) == my_seq:
+                # 한 건도 매칭 못 함 → 실제 원인을 진단해 사용자에게 안내
+                try:
+                    diag = client.diagnose_price(missing[0])
+                except Exception as exc:   # noqa: BLE001
+                    diag = {"code": missing[0], "ok": False, "message": str(exc)}
+                self.after(0, self._show_price_diag, diag)
 
     # ---- 입고단가 매칭 진행 표시(경과시간 매초 갱신 + %) -----------------
     def _start_match_progress(self, total: int) -> None:
@@ -3388,6 +3400,36 @@ class App(tk.Tk):
         mm, ss = divmod(el, 60)
         self.status.set(
             f"입고단가 매칭 완료 — {int(n_fetched):,}/{int(total):,}건 (소요 {mm}:{ss:02d})")
+
+    def _show_price_diag(self, info: dict) -> None:
+        """입고단가 0건 매칭 시: EcountERP 실제 응답으로 원인 안내."""
+        code = info.get("code", "")
+        if info.get("ok"):
+            pmsg.showinfo(
+                "입고단가 진단",
+                f"품목 '{code}' 조회는 성공했습니다(입고단가={info.get('in_price')}).\n"
+                f"응답 필드: {', '.join(info.get('row_keys', [])[:20])}\n\n"
+                "조회는 되는데 매칭이 0건이라면 품목코드 형식 차이일 수 있습니다.\n"
+                "이 화면을 캡처해 알려주시면 매칭 규칙을 맞추겠습니다.")
+            self.status.set("입고단가 조회는 성공(매칭 규칙 점검 필요)")
+            return
+        status = info.get("status")
+        message = str(info.get("message", ""))
+        raw = str(info.get("raw", ""))
+        blob = message + " " + raw
+        hint = ""
+        if ("EXP00001" in blob) or ("인증되지 않은 API" in blob):
+            hint = ("\n\n→ API 인증키에 '품목등록(GetBasicProductsList) 조회' 권한이 없습니다.\n"
+                    "  EcountERP [Self-Customizing ▸ API 인증키 관리 ▸ 사용 API]에서\n"
+                    "  '품목등록' 관련 조회 API 사용을 켠 뒤 다시 시도해 주세요.")
+        elif status == 412:
+            hint = ("\n\n→ 세션 제한(HTTP 412)으로 계속 거부되고 있습니다.\n"
+                    "  잠시 후 다시 조회하거나, 계속되면 알려주세요.")
+        self.status.set("입고단가 매칭 실패 — 원인 안내 참고")
+        pmsg.showerror(
+            "입고단가 매칭 실패 — 원인",
+            f"품목 '{code}' 입고단가 조회에 실패했습니다.\n"
+            f"상태: HTTP {status}\n사유: {message}{hint}")
 
     def _query_failed(self, msg: str) -> None:
         self.btn_query.configure(state="normal")
@@ -3979,6 +4021,49 @@ class App(tk.Tk):
             f"{self._daily_year}년 {mtxt} · {len(view)}건{shared}" if view
             else f"{self._daily_year}년 {mtxt} — 기록 없음")
         self._draw_diff_chart()
+
+    def _delete_daily_rows(self, tree) -> None:
+        """관리자: 일일현황에서 선택한 행(들)을 개별 삭제(공유 저장소 반영)."""
+        if (self._auth or {}).get("role") != "admin":
+            return
+        sel = tree.selection()
+        if not sel:
+            pmsg.showinfo("삭제", "삭제할 행을 먼저 선택하세요.")
+            return
+        keys, labels = [], []
+        for iid in sel:
+            vals = tree.item(iid, "values")
+            if len(vals) >= 2:
+                d, t = str(vals[0]), str(vals[1])
+                keys.append((d, t))
+                labels.append(f"{d} {t}")
+        if not keys:
+            return
+        if not backend.backend_enabled():
+            pmsg.showwarning("삭제 불가", "공유 백엔드가 설정되지 않아 삭제할 수 없습니다.")
+            return
+        preview = "\n".join(labels[:10]) + ("\n…" if len(labels) > 10 else "")
+        if not pmsg.askyesno(
+                "일일현황 삭제",
+                f"선택한 {len(keys)}건의 기록을 삭제할까요?\n\n{preview}\n\n"
+                "삭제하면 모든 사용자의 공유 현황에서 제거됩니다."):
+            return
+        self.daily_status.set("삭제 중…")
+
+        def work():
+            try:
+                n, err = backend.delete_daily(keys), None
+            except Exception as e:   # noqa: BLE001
+                n, err = 0, e
+
+            def done():
+                if err:
+                    pmsg.showerror("삭제 실패", str(err))
+                else:
+                    pmsg.showinfo("삭제 완료", f"{n}건을 삭제했습니다.")
+                self._render_daily()   # 공유 기록 재로딩 + 표/그래프 갱신
+            self.after(0, done)
+        threading.Thread(target=work, daemon=True).start()
 
     def _set_chart_mode(self, mode: str) -> None:
         """원가차이 추이 보기 전환(day/month) + 버튼 강조 + 그래프 갱신."""
