@@ -1455,7 +1455,10 @@ class App(tk.Tk):
                 env=cfg.get("ENV", "production"))
             client.get_zone()
             client.login()                      # 접속 1회
-            allp = client.get_all_prices()      # 같은 세션 일괄 조회(추가 로그인 없음)
+            # 같은 세션에서 페이지를 넘겨가며 전체 수집(1만건 이상 처리, 추가 로그인 없음)
+            allp = client.get_all_prices(
+                progress=lambda n: self.after(
+                    0, lambda n=n: self.status.set(f"입고단가 받는 중… {n:,}건 (접속 1회)")))
             nonzero = sum(1 for v in allp.values() if v and v > 0)
             if not allp or not nonzero:
                 # 일괄로 단가를 못 받음 → 품목 1건으로 원인 진단
@@ -2666,7 +2669,7 @@ class App(tk.Tk):
         self.btn_sub_csv = gray_button(btns, "소계/평균만 내보내기", self._export_subtotals)
         self.btn_sub_csv.configure(state="disabled")
         self.btn_sub_csv.pack(side="left")
-        self.btn_fetch_price = gray_button(btns, "⬇  EcountERP 입고단가 받기",
+        self.btn_fetch_price = gray_button(btns, "⬇  입고단가 받기",
                                            self._fetch_prices_from_ecount)
         self.btn_fetch_price.pack(side="left", padx=8)
         self._attach_tooltip(

@@ -203,40 +203,68 @@ class EcountClient:
             raise EcountApiError("로그인 실패(SESSION_ID 없음)")
         return sess, sid
 
-    # ---- 5) 입고단가 일괄 조회 (단일 세션 1회, 추가 로그인 없음) ----------
-    def get_all_prices(self) -> dict[str, float]:
-        """현재 세션으로 품목등록(GetBasicProductsList)을 '한 번' 조회해
-        {품목코드: 입고단가(IN_PRICE)} 전체를 반환한다(재고현황 조회의 로그인 세션 재사용).
+    # ---- 5) 입고단가 일괄 조회 (단일 세션, 페이지네이션으로 전체 수집) ------
+    def get_all_prices(self, page_size: int = 10000, max_pages: int = 200,
+                       progress=None) -> dict[str, float]:
+        """현재 세션(추가 로그인 없음)으로 품목등록(GetBasicProductsList)을 조회해
+        {품목코드: 입고단가(IN_PRICE)} 전체를 반환한다.
 
-        주의: 빈 조건 조회는 첫 10000건까지만 반환(페이지네이션 없음).
+        1만건 이상도 처리하기 위해 같은 세션에서 페이지를 넘겨가며 누적한다.
+        서버가 페이지네이션을 지원하면 다음 페이지를 계속 받아오고,
+        지원하지 않아 같은 데이터가 반복되면(새 품목 0건) 안전하게 종료한다.
+        progress(받은_품목수)가 주어지면 페이지마다 호출한다.
         """
         if not self.session_id:
             self.login()
-        url = (
+        base = (
             f"{self._base_url(with_zone=True)}"
             f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={self.session_id}"
         )
-        self.call_count += 1
-        try:
-            resp = self._session.post(url, json={}, timeout=self.timeout)
-        except requests.RequestException as exc:
-            raise EcountApiError(f"네트워크 오류: {exc}") from exc
-        if resp.status_code != 200:
-            raise EcountApiError(f"입고단가 조회 실패: HTTP {resp.status_code}")
-        try:
-            rows = ((resp.json().get("Data") or {}).get("Result")) or []
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise EcountApiError(f"입고단가 응답 파싱 실패: {exc}") from exc
         out: dict[str, float] = {}
-        for r in rows:
-            code = str(r.get("PROD_CD", "")).strip()
-            if not code or code in out:
-                continue
-            # 일괄(목록) 응답에 입고단가 필드가 없으면 확정하지 않고 건너뛴다
-            # → 호출측에서 해당 품목만 품목별 조회로 보충(매칭 누락 방지).
-            if "IN_PRICE" not in r or r.get("IN_PRICE") in (None, ""):
-                continue
-            out[code] = _num(r.get("IN_PRICE"))
+        seen: set[str] = set()
+        page = 1
+        while page <= max_pages:
+            # 서버마다 페이지 파라미터 명칭이 달라, 흔한 후보를 함께 전달(미지원 키는 무시됨)
+            body = {
+                "PAGE": page, "PAGE_NO": page, "PAGE_INDEX": page,
+                "PAGE_SIZE": page_size, "ROWS_PER_PAGE": page_size,
+            }
+            self.call_count += 1
+            try:
+                resp = self._session.post(base, json=body, timeout=self.timeout)
+            except requests.RequestException as exc:
+                if page == 1:
+                    raise EcountApiError(f"네트워크 오류: {exc}") from exc
+                break
+            if resp.status_code != 200:
+                if page == 1:
+                    raise EcountApiError(f"입고단가 조회 실패: HTTP {resp.status_code}")
+                break
+            try:
+                rows = ((resp.json().get("Data") or {}).get("Result")) or []
+            except (json.JSONDecodeError, ValueError) as exc:
+                if page == 1:
+                    raise EcountApiError(f"입고단가 응답 파싱 실패: {exc}") from exc
+                break
+            if not rows:
+                break
+
+            fresh = 0
+            for r in rows:
+                code = str(r.get("PROD_CD", "")).strip()
+                if not code or code in seen:
+                    continue
+                seen.add(code)
+                fresh += 1
+                # 입고단가 필드가 있을 때만 확정(목록에 단가 없으면 건너뜀)
+                if "IN_PRICE" in r and r.get("IN_PRICE") not in (None, ""):
+                    out[code] = _num(r.get("IN_PRICE"))
+            if progress:
+                progress(len(out))
+            # 새 품목이 하나도 없으면(서버가 페이지네이션 미지원·동일결과 반복) 종료
+            if fresh == 0:
+                break
+            page += 1
         return out
 
     # ---- 6) 품목코드별 입고단가 조회 (품목등록 IN_PRICE, 개별 매칭) -------
