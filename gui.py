@@ -2682,20 +2682,6 @@ class App(tk.Tk):
         self.btn_sub_csv = gray_button(btns, "소계/평균만 내보내기", self._export_subtotals)
         self.btn_sub_csv.configure(state="disabled")
         self.btn_sub_csv.pack(side="left")
-        self.btn_fetch_price = gray_button(btns, "⬇  입고단가 받기",
-                                           self._fetch_prices_from_ecount)
-        self.btn_fetch_price.pack(side="left", padx=8)
-        self._attach_tooltip(
-            self.btn_fetch_price,
-            "EcountERP에 1회 접속해 품목등록 입고단가를 일괄로 받아옵니다.\n"
-            "받은 뒤에는 재고현황 조회 시 접속 없이 입고단가가 매칭됩니다.")
-        self.btn_import_price = gray_button(btns, "📄  파일에서", self._import_price_file)
-        self.btn_import_price.pack(side="left")
-        self._attach_tooltip(
-            self.btn_import_price,
-            "EcountERP에서 내보낸 품목 파일(CSV/Excel, 1만건 이상 가능)을 직접 선택해\n"
-            "접속 없이 입고단가를 매칭합니다.\n"
-            "파일에 '품목코드'와 '입고단가' 컬럼이 있으면 자동 인식합니다.")
         self.btn_clear_cache = gray_button(btns, "🗑  캐시 비우기", self._clear_price_cache)
         self.btn_clear_cache.pack(side="left", padx=8)
         self._attach_tooltip(
@@ -3585,27 +3571,30 @@ class App(tk.Tk):
         all_display = cmp.build_inventory_display(rows, price_map=price_map)
         self.after(0, self._query_done, data, rows, all_display, note)
 
-        # 2) 입고단가: 재고현황과 '같은 세션'으로 품목등록(IN_PRICE)을 1회 일괄 조회한다.
-        #    → 조회 1회당 EcountERP 로그인은 '1회'만 발생(품목별 재로그인 없음).
-        #    (재고 있는 품목 중 캐시에 없는 것만 채우면 충분)
+        # 2) 입고단가 매칭: 재고 1개 이상(stock_codes) 품목을 '품목등록'에서 품목코드별로
+        #    조회해 입고단가(IN_PRICE)를 매칭한다. (이미 캐시에 있는 품목은 재조회하지 않음)
+        #    → 재고현황 리스트 ↔ 품목등록 입고단가를 정확히 매칭해 표기.
         missing = [c for c in stock_codes if c not in cache]
         if missing and getattr(self, "_query_seq", 0) == my_seq:
-            self.after(0, self._start_match_progress, 0)   # 경과시간 표시(일괄)
+            self.after(0, self._start_match_progress, len(missing))
+
+            def prog(d, t):
+                self.after(0, self._set_match_progress, d, t)
             try:
-                allp = client.get_all_prices()   # 로그인된 세션 재사용(추가 로그인 없음)
+                fetched = client.get_prices(
+                    missing, progress=prog,
+                    should_stop=lambda: getattr(self, "_query_seq", 0) != my_seq)
             except EcountApiError:
-                allp = {}
-            fetched = {c: allp[c] for c in missing if c in allp}
-            nonzero = sum(1 for v in fetched.values() if v and v > 0)
+                fetched = {}
             self.after(0, self._stop_match_progress, len(fetched), len(missing))
-            if fetched and nonzero and getattr(self, "_query_seq", 0) == my_seq:
+            if fetched and getattr(self, "_query_seq", 0) == my_seq:
                 cache.update(fetched)
                 save_price_cache(cache)
                 full_map = {c: cache[c] for c in inv_codes if c in cache}
                 new_all = cmp.build_inventory_display(rows, price_map=full_map)
                 self.after(0, self._prices_updated, rows, new_all, len(fetched))
-            elif getattr(self, "_query_seq", 0) == my_seq:
-                # 일괄 조회가 입고단가를 돌려주지 못함 → 실제 원인 진단(이때만 추가 1회 로그인)
+            elif not fetched and getattr(self, "_query_seq", 0) == my_seq:
+                # 한 건도 매칭 못 함 → 실제 원인 진단
                 try:
                     diag = client.diagnose_price(missing[0])
                 except Exception as exc:   # noqa: BLE001
