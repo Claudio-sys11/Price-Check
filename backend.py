@@ -373,6 +373,19 @@ def reset_password(username: str) -> None:
     _commit_users(modify, f"reset-pw {username}")
 
 
+def lock_user(username: str) -> None:
+    """관리자: 사용자 계정을 잠금(접속 차단). 관리자 계정은 잠글 수 없다."""
+    def modify(d):
+        u = _find(d["users"], username)
+        if not u:
+            raise AuthError("사용자를 찾을 수 없습니다.")
+        if u.get("role") == "admin" or (username or "").lower() == ADMIN_USERNAME.lower():
+            raise AuthError("관리자 계정은 잠글 수 없습니다.")
+        u["locked"] = True
+        u["unlock_requested"] = False
+    _commit_users(modify, f"lock {username}")
+
+
 def unlock_user(username: str) -> None:
     """관리자: 잠긴 사용자 계정 잠금 해제(실패 횟수·요청 초기화)."""
     def modify(d):

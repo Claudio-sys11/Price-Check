@@ -2245,7 +2245,8 @@ class App(tk.Tk):
         btns.pack(fill="x", padx=16, pady=(2, 6))
         accent_button(btns, "승인", lambda: self._useradmin_act("approve")).pack(side="left")
         gray_button(btns, "거절", lambda: self._useradmin_act("reject")).pack(side="left", padx=6)
-        gray_button(btns, "잠금 해제", self._useradmin_unlock).pack(side="left")
+        gray_button(btns, "잠금", self._useradmin_lock).pack(side="left")
+        gray_button(btns, "잠금 해제", self._useradmin_unlock).pack(side="left", padx=6)
         gray_button(btns, "비밀번호 초기화", self._useradmin_reset_pw).pack(side="left", padx=6)
         gray_button(btns, "ID 수정", self._useradmin_rename).pack(side="left")
         gray_button(btns, "삭제", lambda: self._useradmin_act("delete")).pack(side="left", padx=6)
@@ -2421,6 +2422,30 @@ class App(tk.Tk):
             self.useradmin_status.set("먼저 목록에서 사용자(행)를 클릭해 선택하세요.")
             return None
         return sel[0]
+
+    def _useradmin_lock(self) -> None:
+        """선택한 사용자를 잠금(접속 차단). 관리자 계정은 잠글 수 없음."""
+        uname = self._useradmin_selected()
+        if not uname:
+            return
+        if not pmsg.askyesno(
+                "계정 잠금",
+                f"'{uname}' 계정을 잠그시겠습니까?\n"
+                "잠그면 해당 사용자는 로그인(접속)할 수 없습니다.\n"
+                "(관리자가 '잠금 해제'로 다시 풀 수 있습니다.)"):
+            return
+        self.useradmin_status.set("잠금 처리 중…")
+
+        def work():
+            try:
+                backend.lock_user(uname)
+                self.after(0, lambda: (self._render_user_admin(),
+                                       pmsg.showinfo("계정 잠금",
+                                                     f"'{uname}' 계정을 잠갔습니다. 접속이 차단됩니다.")))
+            except Exception as e:   # noqa: BLE001
+                self.after(0, lambda: (self.useradmin_status.set(f"오류: {e}"),
+                                       pmsg.showerror("잠금 실패", str(e))))
+        threading.Thread(target=work, daemon=True).start()
 
     def _useradmin_unlock(self) -> None:
         uname = self._useradmin_selected()
