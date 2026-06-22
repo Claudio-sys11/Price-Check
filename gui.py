@@ -1506,19 +1506,32 @@ class App(tk.Tk):
         cache = load_price_cache()
         cache.update(prices)
         save_price_cache(cache)
-        self.status.set(f"EcountERP 입고단가 {len(prices):,}건 받음 (접속 없이 매칭)")
-        # 이미 재고현황을 조회해 둔 상태면 즉시 재매칭
+        self.status.set(f"입고단가 {len(prices):,}건 받음 (접속 없이 매칭)")
+
+        # 현재 재고품목과의 매칭 커버리지 점검(매칭 안 되는 원인 진단)
+        cov_txt = ""
         if getattr(self, "_inventory_rows", None):
             code_f = (cmp.detect_ecount_fields(self._inventory_rows)
                       .get("품목코드") or "PROD_CD")
             inv_codes = [str(r.get(code_f, "")).strip() for r in self._inventory_rows]
-            full = {c: cache[c] for c in inv_codes if c and c in cache}
+            inv_codes = [c for c in inv_codes if c]
+            uniq = list(dict.fromkeys(inv_codes))
+            matched = [c for c in uniq if c in cache]
+            full = {c: cache[c] for c in matched}
             new_all = cmp.build_inventory_display(self._inventory_rows, price_map=full)
             self._prices_updated(self._inventory_rows, new_all, len(full))
+            unmatched = [c for c in uniq if c not in cache]
+            cov_txt = (f"\n\n현재 재고품목 매칭: {len(matched):,} / {len(uniq):,}건")
+            if unmatched:
+                sample = ", ".join(unmatched[:5])
+                cov_txt += (f"\n미매칭 {len(unmatched):,}건 (예: {sample})\n"
+                            "→ 미매칭이 많으면 받은 목록에 해당 품목이 없거나(1만건 초과 등) "
+                            "품목코드 형식이 다른 경우입니다.\n"
+                            "   [📄 파일에서]로 EcountERP 품목 전체 파일을 불러오면 확실히 매칭됩니다.")
         pmsg.showinfo(
             "입고단가 받기 완료",
             f"{len(prices):,}건의 입고단가를 받았습니다.\n"
-            "이제 재고현황 조회 시 접속 없이 입고단가가 매칭됩니다.")
+            "이제 재고현황 조회 시 접속 없이 입고단가가 매칭됩니다." + cov_txt)
 
     def _import_price_file(self) -> None:
         """EcountERP 품목 내보내기 파일(CSV/Excel)을 불러와 입고단가 캐시에 반영.

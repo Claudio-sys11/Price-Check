@@ -203,68 +203,90 @@ class EcountClient:
             raise EcountApiError("로그인 실패(SESSION_ID 없음)")
         return sess, sid
 
-    # ---- 5) 입고단가 일괄 조회 (단일 세션, 페이지네이션으로 전체 수집) ------
-    def get_all_prices(self, page_size: int = 10000, max_pages: int = 200,
-                       progress=None) -> dict[str, float]:
-        """현재 세션(추가 로그인 없음)으로 품목등록(GetBasicProductsList)을 조회해
-        {품목코드: 입고단가(IN_PRICE)} 전체를 반환한다.
+    def _products_query(self, sess, sid: str, body: dict) -> list:
+        """품목등록(GetBasicProductsList) 1회 조회 → 행 목록 반환."""
+        url = (
+            f"{self._base_url(with_zone=True)}"
+            f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={sid}"
+        )
+        self.call_count += 1
+        resp = sess.post(url, json=body, timeout=self.timeout)
+        if resp.status_code != 200:
+            raise EcountApiError(f"HTTP {resp.status_code}")
+        return ((resp.json().get("Data") or {}).get("Result")) or []
 
-        1만건 이상도 처리하기 위해 같은 세션에서 페이지를 넘겨가며 누적한다.
-        서버가 페이지네이션을 지원하면 다음 페이지를 계속 받아오고,
-        지원하지 않아 같은 데이터가 반복되면(새 품목 0건) 안전하게 종료한다.
-        progress(받은_품목수)가 주어지면 페이지마다 호출한다.
+    # ---- 5) 입고단가 전체 수집 (PROD_CD 접두 분할로 1만건 이상 처리) --------
+    def get_all_prices(self, progress=None, cap: int = 10000,
+                       max_logins: int = 120) -> dict[str, float]:
+        """품목등록에서 {품목코드: 입고단가} 전체를 수집한다.
+
+        EcountERP GetBasicProductsList 는 빈 조건 조회 시 첫 cap(=10000)건만 주고
+        PAGE 파라미터를 지원하지 않으므로, 1만건 이상은 'PROD_CD 접두 분할'로 모은다.
+          1) 빈 조건 1회(현재 세션) → cap 미만이면 그대로 끝.
+          2) cap 도달(잘림) → PROD_CD 접두(0~9,A~Z…)별로 분할 조회해 누적.
+             접두 지정 조회는 세션당 제한(412)이 있어 분할마다 새 세션으로 로그인.
+             접두가 또 cap 이면 더 잘게(2글자) 분할. 새 품목이 안 나오면(접두검색
+             미지원) 조기에 중단한다.
+        progress(누적_품목수) 콜백 지원.
         """
         if not self.session_id:
             self.login()
-        base = (
-            f"{self._base_url(with_zone=True)}"
-            f"/OAPI/V2/InventoryBasic/GetBasicProductsList?SESSION_ID={self.session_id}"
-        )
         out: dict[str, float] = {}
         seen: set[str] = set()
-        page = 1
-        while page <= max_pages:
-            # 서버마다 페이지 파라미터 명칭이 달라, 흔한 후보를 함께 전달(미지원 키는 무시됨)
-            body = {
-                "PAGE": page, "PAGE_NO": page, "PAGE_INDEX": page,
-                "PAGE_SIZE": page_size, "ROWS_PER_PAGE": page_size,
-            }
-            self.call_count += 1
-            try:
-                resp = self._session.post(base, json=body, timeout=self.timeout)
-            except requests.RequestException as exc:
-                if page == 1:
-                    raise EcountApiError(f"네트워크 오류: {exc}") from exc
-                break
-            if resp.status_code != 200:
-                if page == 1:
-                    raise EcountApiError(f"입고단가 조회 실패: HTTP {resp.status_code}")
-                break
-            try:
-                rows = ((resp.json().get("Data") or {}).get("Result")) or []
-            except (json.JSONDecodeError, ValueError) as exc:
-                if page == 1:
-                    raise EcountApiError(f"입고단가 응답 파싱 실패: {exc}") from exc
-                break
-            if not rows:
-                break
 
-            fresh = 0
+        def absorb(rows) -> int:
+            added = 0
             for r in rows:
                 code = str(r.get("PROD_CD", "")).strip()
                 if not code or code in seen:
                     continue
                 seen.add(code)
-                fresh += 1
-                # 입고단가 필드가 있을 때만 확정(목록에 단가 없으면 건너뜀)
+                added += 1
                 if "IN_PRICE" in r and r.get("IN_PRICE") not in (None, ""):
                     out[code] = _num(r.get("IN_PRICE"))
+            return added
+
+        # 1) 빈 조건 전체(현재 세션)
+        try:
+            rows = self._products_query(self._session, self.session_id, {})
+        except requests.RequestException as exc:
+            raise EcountApiError(f"네트워크 오류: {exc}") from exc
+        absorb(rows)
+        if progress:
+            progress(len(out))
+        if len(rows) < cap:
+            return out   # 전체가 cap 미만 → 분할 불필요
+
+        # 2) cap 도달 → PROD_CD 접두 분할
+        import string
+        charset = list("0123456789") + list(string.ascii_uppercase)
+        queue = list(charset)
+        logins = 0
+        tried = 0
+        gained = 0
+        while queue and logins < max_logins:
+            prefix = queue.pop(0)
+            try:
+                sess, sid = self._login_fresh()
+                logins += 1
+                rows = self._products_query(sess, sid, {"PROD_CD": prefix})
+            except Exception:   # noqa: BLE001
+                continue        # 로그인/조회 실패한 접두는 건너뜀
+            added = absorb(rows)
             if progress:
                 progress(len(out))
-            # 새 품목이 하나도 없으면(서버가 페이지네이션 미지원·동일결과 반복) 종료
-            if fresh == 0:
+            tried += 1
+            if added > 0:
+                gained += 1
+            # (a) 접두가 무시됨: 빈조건과 같은 cap 결과를 그대로 돌려줌(새 품목 0) → 분할 불가
+            if len(rows) >= cap and added == 0:
                 break
-            page += 1
+            # (b) 접두 검색 미지원 추정: 충분히 시도(12회)했는데 새 품목이 전무 → 중단
+            if tried >= 12 and gained == 0:
+                break
+            # 이 접두도 cap 이면 더 잘게(2글자) 분할
+            if len(rows) >= cap:
+                queue[:0] = [prefix + c for c in charset]
         return out
 
     # ---- 6) 품목코드별 입고단가 조회 (품목등록 IN_PRICE, 개별 매칭) -------

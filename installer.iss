@@ -8,7 +8,7 @@
 #define MyAppId "8F3C2A91-7B4D-4E26-9A1F-EC0A17E5C001"
 #define MyAppName "실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교"
 #define MyShortcutName "원가비교 프로그램"
-#define MyAppVersion "1.0.95"
+#define MyAppVersion "1.0.96"
 #define MyAppPublisher "THE FEEL KOREA CO.,LTD."
 #define MyAppExeName "EcountInventory.exe"
 
