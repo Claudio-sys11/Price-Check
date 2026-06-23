@@ -1212,7 +1212,8 @@ class App(tk.Tk):
         style.configure("TLabel", background=BG, foreground=TEXT)
         style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=(FONT, 9))
         style.configure("Status.TLabel", background=BG, foreground=ACCENT_ACTIVE, font=(FONT, 9, "bold"))
-        style.configure("InvTotals.TLabel", background=BG, foreground=TEXT, font=(FONT, 12, "bold"))
+        style.configure("InvTotals.TLabel", background=BG, foreground=ACCENT_ACTIVE,
+                        font=(FONT, 14, "bold"))
         # 입력 — 평평하고 얇은 헤어라인(모던)
         style.configure("TEntry", fieldbackground="white", bordercolor=BORDER,
                         lightcolor=BORDER, darkcolor=BORDER, relief="flat", padding=6)
@@ -3820,7 +3821,7 @@ class App(tk.Tk):
             sum_amt = sum(cmp._to_number(d.get("총단가")) for d in filtered)
             if filtered:
                 self.inv_totals.set(
-                    f"총 수량 {int(round(sum_qty)):,}   ·   "
+                    f"총 수량 {int(round(sum_qty)):,}  /  "
                     f"총 재고금액 {int(round(sum_amt)):,} 원")
             else:
                 self.inv_totals.set("")
