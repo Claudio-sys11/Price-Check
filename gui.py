@@ -1212,7 +1212,10 @@ class App(tk.Tk):
         style.configure("TLabel", background=BG, foreground=TEXT)
         style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=(FONT, 9))
         style.configure("Status.TLabel", background=BG, foreground=ACCENT_ACTIVE, font=(FONT, 9, "bold"))
-        style.configure("InvTotals.TLabel", background=BG, foreground=ACCENT_ACTIVE,
+        # 총 수량/총 재고금액: 라벨(빨강) + 숫자(검정) 굵게
+        style.configure("TotLabel.TLabel", background=BG, foreground="#dc2626",
+                        font=(FONT, 14, "bold"))
+        style.configure("TotNum.TLabel", background=BG, foreground="#111111",
                         font=(FONT, 14, "bold"))
         # 입력 — 평평하고 얇은 헤어라인(모던)
         style.configure("TEntry", fieldbackground="white", bordercolor=BORDER,
@@ -2691,13 +2694,22 @@ class App(tk.Tk):
             "원가(입고단가)를 변경했는데 조회 결과에 반영되지 않으면\n"
             "이 버튼으로 캐시를 비우세요.\n"
             "다음 조회 때 품목등록에서 최신 입고단가를 다시 받아옵니다.")
-        # 우측 상단: 조회현황(상태) + 그 아래 총수량/총금액(굵게)
+        # 우측 상단: 조회현황(상태) + 그 아래 총수량/총금액(라벨 빨강·숫자 검정·굵게)
         right = ttk.Frame(btns)
         right.pack(side="right")
         self.status = tk.StringVar(value="대기 중")
         ttk.Label(right, textvariable=self.status, style="Status.TLabel").pack(anchor="e")
-        self.inv_totals = tk.StringVar(value="")
-        ttk.Label(right, textvariable=self.inv_totals, style="InvTotals.TLabel").pack(anchor="e")
+        self._totals_row = ttk.Frame(right)
+        self.var_tot_qty = tk.StringVar(value="")
+        self.var_tot_amt = tk.StringVar(value="")
+        ttk.Label(self._totals_row, text="총 수량", style="TotLabel.TLabel").pack(side="left")
+        ttk.Label(self._totals_row, textvariable=self.var_tot_qty,
+                  style="TotNum.TLabel").pack(side="left", padx=(5, 0))
+        ttk.Label(self._totals_row, text="/  총 재고금액",
+                  style="TotLabel.TLabel").pack(side="left", padx=(8, 0))
+        ttk.Label(self._totals_row, textvariable=self.var_tot_amt,
+                  style="TotNum.TLabel").pack(side="left", padx=(5, 0))
+        ttk.Label(self._totals_row, text="원", style="TotNum.TLabel").pack(side="left", padx=(2, 0))
 
         tf = tk.Frame(root, bg=BORDER)   # 1px 테두리 느낌의 카드
         tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
@@ -3495,8 +3507,10 @@ class App(tk.Tk):
         self._query_seq = getattr(self, "_query_seq", 0) + 1  # 새 조회 → 이전 백그라운드 가격조회 중단
         self.btn_query.configure(state="disabled")
         self.btn_inv_csv.configure(state="disabled")
-        if hasattr(self, "inv_totals"):
-            self.inv_totals.set("")
+        if hasattr(self, "_totals_row"):
+            self.var_tot_qty.set("")
+            self.var_tot_amt.set("")
+            self._totals_row.pack_forget()
         self.status.set("조회 중...")
         try:
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -3815,16 +3829,18 @@ class App(tk.Tk):
         else:
             self.status.set(f"필터 {shown}건 / 전체 {total}건 {suffix}".rstrip())
 
-        # 우측 상단: 총 수량 + 총 재고 금액(총단가 합계) — 굵게 표시
-        if hasattr(self, "inv_totals"):
-            sum_qty = sum(cmp._to_number(d.get("재고수량")) for d in filtered)
-            sum_amt = sum(cmp._to_number(d.get("총단가")) for d in filtered)
+        # 우측 상단: 총 수량 + 총 재고 금액(총단가 합계) — 라벨 빨강·숫자 검정
+        if hasattr(self, "_totals_row"):
             if filtered:
-                self.inv_totals.set(
-                    f"총 수량 {int(round(sum_qty)):,}  /  "
-                    f"총 재고금액 {int(round(sum_amt)):,} 원")
+                sum_qty = sum(cmp._to_number(d.get("재고수량")) for d in filtered)
+                sum_amt = sum(cmp._to_number(d.get("총단가")) for d in filtered)
+                self.var_tot_qty.set(f"{int(round(sum_qty)):,}")
+                self.var_tot_amt.set(f"{int(round(sum_amt)):,}")
+                self._totals_row.pack(anchor="e")
             else:
-                self.inv_totals.set("")
+                self.var_tot_qty.set("")
+                self.var_tot_amt.set("")
+                self._totals_row.pack_forget()
 
     def _grand_total_row(self, filtered: list[dict]) -> dict:
         """검색(필터) 결과 전체의 합계·평균을 담은 행을 만든다."""
