@@ -1212,6 +1212,7 @@ class App(tk.Tk):
         style.configure("TLabel", background=BG, foreground=TEXT)
         style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=(FONT, 9))
         style.configure("Status.TLabel", background=BG, foreground=ACCENT_ACTIVE, font=(FONT, 9, "bold"))
+        style.configure("InvTotals.TLabel", background=BG, foreground=TEXT, font=(FONT, 12, "bold"))
         # 입력 — 평평하고 얇은 헤어라인(모던)
         style.configure("TEntry", fieldbackground="white", bordercolor=BORDER,
                         lightcolor=BORDER, darkcolor=BORDER, relief="flat", padding=6)
@@ -2689,8 +2690,13 @@ class App(tk.Tk):
             "원가(입고단가)를 변경했는데 조회 결과에 반영되지 않으면\n"
             "이 버튼으로 캐시를 비우세요.\n"
             "다음 조회 때 품목등록에서 최신 입고단가를 다시 받아옵니다.")
+        # 우측 상단: 조회현황(상태) + 그 아래 총수량/총금액(굵게)
+        right = ttk.Frame(btns)
+        right.pack(side="right")
         self.status = tk.StringVar(value="대기 중")
-        ttk.Label(btns, textvariable=self.status, style="Status.TLabel").pack(side="right")
+        ttk.Label(right, textvariable=self.status, style="Status.TLabel").pack(anchor="e")
+        self.inv_totals = tk.StringVar(value="")
+        ttk.Label(right, textvariable=self.inv_totals, style="InvTotals.TLabel").pack(anchor="e")
 
         tf = tk.Frame(root, bg=BORDER)   # 1px 테두리 느낌의 카드
         tf.pack(fill="both", expand=True, padx=16, pady=(2, 14))
@@ -3488,6 +3494,8 @@ class App(tk.Tk):
         self._query_seq = getattr(self, "_query_seq", 0) + 1  # 새 조회 → 이전 백그라운드 가격조회 중단
         self.btn_query.configure(state="disabled")
         self.btn_inv_csv.configure(state="disabled")
+        if hasattr(self, "inv_totals"):
+            self.inv_totals.set("")
         self.status.set("조회 중...")
         try:
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -3805,6 +3813,17 @@ class App(tk.Tk):
             self.status.set(f"완료 — {total}건 {suffix}".rstrip())
         else:
             self.status.set(f"필터 {shown}건 / 전체 {total}건 {suffix}".rstrip())
+
+        # 우측 상단: 총 수량 + 총 재고 금액(총단가 합계) — 굵게 표시
+        if hasattr(self, "inv_totals"):
+            sum_qty = sum(cmp._to_number(d.get("재고수량")) for d in filtered)
+            sum_amt = sum(cmp._to_number(d.get("총단가")) for d in filtered)
+            if filtered:
+                self.inv_totals.set(
+                    f"총 수량 {int(round(sum_qty)):,}   ·   "
+                    f"총 재고금액 {int(round(sum_amt)):,} 원")
+            else:
+                self.inv_totals.set("")
 
     def _grand_total_row(self, filtered: list[dict]) -> dict:
         """검색(필터) 결과 전체의 합계·평균을 담은 행을 만든다."""
