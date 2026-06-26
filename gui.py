@@ -1981,13 +1981,74 @@ class App(tk.Tk):
             return
         if is_admin:
             self.btn_load_shared.pack_forget()
+            self.btn_request_update.pack_forget()
             self.btn_query.pack(side="left", before=self.btn_inv_csv)
             self.btn_clear_cache.pack(side="left", padx=8)
         else:
             self.btn_query.pack_forget()
             self.btn_clear_cache.pack_forget()
             self.btn_load_shared.pack(side="left", before=self.btn_inv_csv)
+            self.btn_request_update.pack(side="left", padx=8, before=self.btn_inv_csv)
             self.after(300, self._load_shared_inventory)   # 로그인 직후 공유본 자동 로드
+
+    def _request_inventory_update(self) -> None:
+        """일반 사용자: 관리자에게 재고현황 갱신을 요청."""
+        if not backend.backend_enabled():
+            pmsg.showwarning("요청 불가", "공유 백엔드가 설정되지 않았습니다.")
+            return
+        a = self._auth or {}
+        uname = a.get("username", "")
+        name = a.get("name") or self._display_user(uname)
+        self.status.set("업데이트 요청 중…")
+
+        def work():
+            try:
+                backend.request_inventory_update(uname, name)
+                self.after(0, lambda: (
+                    self.status.set("업데이트 요청 접수됨 — 관리자 승인 대기"),
+                    pmsg.showinfo("업데이트 요청",
+                                  "재고현황 업데이트를 관리자에게 요청했습니다.\n"
+                                  "관리자가 승인하면 최신 자료가 공유됩니다.")))
+            except Exception as e:   # noqa: BLE001
+                self.after(0, lambda: pmsg.showerror("요청 실패", str(e)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _check_inventory_request(self) -> None:
+        """관리자: 대기 중인 갱신 요청이 있으면 승인 팝업을 띄운다(폴링)."""
+        if (self._auth or {}).get("role") != "admin" or not backend.backend_enabled():
+            return
+
+        def work():
+            try:
+                req = backend.load_inventory_request()
+            except Exception:   # noqa: BLE001
+                req = None
+            if req and req.get("status") == "pending":
+                self.after(0, lambda: self._prompt_inventory_request(req))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _prompt_inventory_request(self, req: dict) -> None:
+        at = req.get("at", "")
+        by = req.get("by_name") or req.get("by", "")
+        if getattr(self, "_seen_inv_request", "") == at:
+            return   # 같은 요청은 한 번만 안내
+        self._seen_inv_request = at
+        if pmsg.askyesno(
+                "재고현황 업데이트 요청",
+                f"'{by}'님이 재고현황 업데이트를 요청했습니다.\n"
+                f"요청 시각: {at}\n\n"
+                "지금 시스템이 재고현황을 1회 조회해 전체에 공유할까요?"):
+            # 승인 → 요청 해제 후 시스템 조회·공유
+            threading.Thread(
+                target=lambda: self._safe(backend.clear_inventory_request),
+                daemon=True).start()
+            self._auto_query_and_share()
+
+    def _safe(self, fn) -> None:
+        try:
+            fn()
+        except Exception:   # noqa: BLE001
+            pass
 
     def _share_current_inventory(self) -> None:
         """관리자: 현재 재고현황 결과를 공유 저장소에 업로드(전체 공유)."""
@@ -2767,6 +2828,8 @@ class App(tk.Tk):
         # 일반 사용자용: 시스템이 공유한 재고현황 불러오기(직접 EcountERP 접속 없음)
         self.btn_load_shared = accent_button(btns, "🔄  공유 재고현황 불러오기",
                                              self._load_shared_inventory)
+        self.btn_request_update = gray_button(btns, "🔔  업데이트 요청",
+                                              self._request_inventory_update)
         # 기본은 숨김 — 로그인 역할에 따라 _apply_inventory_role 에서 표시
         self.btn_inv_csv = gray_button(
             btns, "Excel 내보내기",
@@ -4168,6 +4231,7 @@ class App(tk.Tk):
                 if getattr(self, "_last_autoshare", "") != hourkey:
                     self._last_autoshare = hourkey
                     self._auto_query_and_share()
+                self._check_inventory_request()   # 사용자 갱신 요청 확인(승인 팝업)
         except Exception:   # noqa: BLE001
             pass
         try:

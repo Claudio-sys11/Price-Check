@@ -27,6 +27,7 @@ API = "https://api.github.com"
 USERS_PATH = "users.json"
 DAILY_PATH = "daily_status.json"
 SHARED_INV_PATH = "inventory_shared.json"   # 시스템(관리자) 조회 결과 공유본
+INV_REQUEST_PATH = "inventory_request.json"  # 일반 사용자의 갱신 요청
 ADMIN_PATH = "admin.json"          # 관리자 비밀번호 변경분(임베드 해시 대체)
 PBKDF2_ITERS = 200_000
 PW_MAX_DAYS = 30                   # 비밀번호 변경 주기(일)
@@ -515,6 +516,55 @@ def load_shared_inventory():
         return None
     data, _ = _get_file(SHARED_INV_PATH)
     return data if isinstance(data, dict) else None
+
+
+def request_inventory_update(username: str, name: str, retries: int = 4) -> None:
+    """일반 사용자: 공유 재고현황 갱신을 관리자에게 요청(pending 등록)."""
+    if not backend_enabled():
+        raise BackendError("백엔드가 설정되지 않았습니다.")
+    payload = {
+        "status": "pending",
+        "by": username,
+        "by_name": name,
+        "at": time.strftime("%Y-%m-%d %H:%M"),
+    }
+    last = None
+    for _ in range(max(1, retries)):
+        try:
+            _, sha = _get_file(INV_REQUEST_PATH)
+            _put_file(INV_REQUEST_PATH, payload, sha, f"inv-update-request {username}")
+            return
+        except BackendError as e:
+            last = e
+            time.sleep(0.6)
+    if last:
+        raise last
+
+
+def load_inventory_request():
+    """현재 등록된 재고현황 갱신 요청을 반환(없으면 None)."""
+    if not backend_enabled():
+        return None
+    data, _ = _get_file(INV_REQUEST_PATH)
+    return data if isinstance(data, dict) else None
+
+
+def clear_inventory_request(retries: int = 4) -> None:
+    """관리자: 요청 처리 완료 → pending 해제."""
+    if not backend_enabled():
+        return
+    payload = {"status": "none", "at": time.strftime("%Y-%m-%d %H:%M")}
+    last = None
+    for _ in range(max(1, retries)):
+        try:
+            _, sha = _get_file(INV_REQUEST_PATH)
+            _put_file(INV_REQUEST_PATH, payload, sha, "inv-update-request cleared")
+            return
+        except BackendError as e:
+            last = e
+            time.sleep(0.6)
+    if last:
+        raise last
 
 
 def delete_daily(keys, retries: int = 4) -> int:
