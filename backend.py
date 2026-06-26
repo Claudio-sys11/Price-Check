@@ -26,6 +26,7 @@ except Exception:                     # pragma: no cover
 API = "https://api.github.com"
 USERS_PATH = "users.json"
 DAILY_PATH = "daily_status.json"
+SHARED_INV_PATH = "inventory_shared.json"   # 시스템(관리자) 조회 결과 공유본
 ADMIN_PATH = "admin.json"          # 관리자 비밀번호 변경분(임베드 해시 대체)
 PBKDF2_ITERS = 200_000
 PW_MAX_DAYS = 30                   # 비밀번호 변경 주기(일)
@@ -488,6 +489,32 @@ def record_daily(record: dict, retries: int = 4) -> None:
             time.sleep(0.6)
     if last:
         raise last
+
+
+def save_shared_inventory(payload: dict, retries: int = 4) -> None:
+    """시스템(관리자) 재고현황 조회 결과를 공유 저장소에 업로드(전체 공유)."""
+    if not backend_enabled():
+        raise BackendError("백엔드가 설정되지 않았습니다.")
+    last = None
+    for _ in range(max(1, retries)):
+        try:
+            _, sha = _get_file(SHARED_INV_PATH)
+            _put_file(SHARED_INV_PATH, payload, sha,
+                      f"share inventory {payload.get('ts', '')}")
+            return
+        except BackendError as e:
+            last = e                  # 409 등 충돌 → sha 다시 받아 재시도
+            time.sleep(0.6)
+    if last:
+        raise last
+
+
+def load_shared_inventory():
+    """공유된 재고현황 결과를 내려받는다(없으면 None)."""
+    if not backend_enabled():
+        return None
+    data, _ = _get_file(SHARED_INV_PATH)
+    return data if isinstance(data, dict) else None
 
 
 def delete_daily(keys, retries: int = 4) -> int:

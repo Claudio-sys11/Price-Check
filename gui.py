@@ -1970,9 +1970,94 @@ class App(tk.Tk):
         self.title(f"실시간 재고 현황(EcountERP) 및 평균 원가(Wizfasta) 비교  "
                    f"v{APP_VERSION}   [{uname} · {rolelbl}]")
         self._build_tabbar(admin=(role == "admin"))
+        self._apply_inventory_role(role == "admin")   # 직접조회(관리자) vs 공유본(사용자)
         self._switch_tab("inv")
         self._draw_header()   # 헤더에 사용자/로그아웃 표시
-        self._start_daily_scheduler()   # 23:00 자동 확정 점검 시작
+        self._start_daily_scheduler()   # 자동 확정/자동 공유 점검 시작
+
+    def _apply_inventory_role(self, is_admin: bool) -> None:
+        """관리자=직접 조회(시스템 역할), 일반 사용자=공유본만 보기(직접조회 차단)."""
+        if not hasattr(self, "btn_query"):
+            return
+        if is_admin:
+            self.btn_load_shared.pack_forget()
+            self.btn_query.pack(side="left", before=self.btn_inv_csv)
+            self.btn_clear_cache.pack(side="left", padx=8)
+        else:
+            self.btn_query.pack_forget()
+            self.btn_clear_cache.pack_forget()
+            self.btn_load_shared.pack(side="left", before=self.btn_inv_csv)
+            self.after(300, self._load_shared_inventory)   # 로그인 직후 공유본 자동 로드
+
+    def _share_current_inventory(self) -> None:
+        """관리자: 현재 재고현황 결과를 공유 저장소에 업로드(전체 공유)."""
+        if (self._auth or {}).get("role") != "admin":
+            return
+        rows = list(getattr(self, "_inventory_display_all", []) or [])
+        if not rows or not backend.backend_enabled():
+            return
+        payload = {
+            "rows": rows,
+            "ts": time.strftime("%Y-%m-%d %H:%M"),
+            "by": (self._auth or {}).get("username", ""),
+            "by_name": ((self._auth or {}).get("name")
+                        or self._display_user((self._auth or {}).get("username", ""))),
+            "suffix": getattr(self, "_inv_status_suffix", ""),
+            "count": len(rows),
+        }
+
+        def work():
+            try:
+                backend.save_shared_inventory(payload)
+                self.after(0, lambda: self.status.set(
+                    f"공유 완료 — 전체 사용자에게 반영됨 ({payload['ts']})"))
+            except Exception as e:   # noqa: BLE001
+                self.after(0, lambda: self.status.set(f"공유 실패: {e}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _auto_query_and_share(self) -> None:
+        """관리자: 정해진 시각(매시)마다 자동으로 재고현황을 조회·공유."""
+        if (self._auth or {}).get("role") != "admin":
+            return
+        cfg = self._current_config()
+        if not (cfg["COM_CODE"] and cfg["USER_ID"] and cfg["API_CERT_KEY"]):
+            return
+        if get_today_api_calls() + EST_CALLS_PER_QUERY > DAILY_API_LIMIT:
+            return   # 일일 한도 초과 시 자동 조회 생략
+        self._query_seq = getattr(self, "_query_seq", 0) + 1
+        self.status.set("자동 조회·공유 중…")
+        threading.Thread(target=self._do_query,
+                         args=(cfg, self._query_seq), daemon=True).start()
+
+    def _load_shared_inventory(self) -> None:
+        """일반 사용자: 시스템이 공유한 재고현황을 내려받아 표시(EcountERP 접속 없음)."""
+        self.status.set("공유 재고현황 불러오는 중…")
+
+        def work():
+            try:
+                data, err = backend.load_shared_inventory(), None
+            except Exception as e:   # noqa: BLE001
+                data, err = None, e
+            self.after(0, lambda: self._shared_inventory_loaded(data, err))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _shared_inventory_loaded(self, data, err) -> None:
+        if err:
+            self.status.set(f"공유 재고현황 불러오기 실패: {err}")
+            return
+        if not data or not data.get("rows"):
+            self.status.set("아직 공유된 재고현황이 없습니다 (관리자 조회 대기)")
+            return
+        rows = data.get("rows") or []
+        self._inventory_rows = rows
+        self._inventory_display_all = rows
+        self._inv_status_suffix = data.get("suffix", "")
+        self.btn_inv_csv.configure(state="normal")
+        self.btn_sub_csv.configure(state="normal")
+        self._render_inventory()
+        ts = data.get("ts", "")
+        by = data.get("by_name") or data.get("by", "")
+        self.status.set(f"공유 재고현황 — {ts} 기준 ({by} 조회)")
 
     def _on_app_close(self) -> None:
         """프로그램 종료(X) 시: 로그인 세션을 해제(자동 로그아웃)하고 닫는다.
@@ -2679,6 +2764,10 @@ class App(tk.Tk):
         btns.pack(fill="x", padx=16, pady=(2, 6))
         self.btn_query = accent_button(btns, "🔍  재고현황 조회", self._on_query)
         self.btn_query.pack(side="left")
+        # 일반 사용자용: 시스템이 공유한 재고현황 불러오기(직접 EcountERP 접속 없음)
+        self.btn_load_shared = accent_button(btns, "🔄  공유 재고현황 불러오기",
+                                             self._load_shared_inventory)
+        # 기본은 숨김 — 로그인 역할에 따라 _apply_inventory_role 에서 표시
         self.btn_inv_csv = gray_button(
             btns, "Excel 내보내기",
             lambda: export_rows_excel(self._inventory_display, "재고현황.xlsx"))
@@ -3626,6 +3715,10 @@ class App(tk.Tk):
 
         # 이번 조회가 사용한 EcountERP 호출 수를 오늘자 사용량에 누적(자정 리셋)
         self._record_api_usage(client)
+        # 관리자(시스템) 조회 결과는 전체 사용자에게 공유
+        if ((self._auth or {}).get("role") == "admin"
+                and getattr(self, "_query_seq", 0) == my_seq):
+            self.after(300, self._share_current_inventory)
 
     # ---- 입고단가 매칭 진행 표시(경과시간 매초 갱신 + %) -----------------
     def _start_match_progress(self, total: int) -> None:
@@ -4069,6 +4162,12 @@ class App(tk.Tk):
                     and getattr(self, "_last_finalized", "") != today):
                 self._last_finalized = today
                 self._finalize_prev_days(today)
+            # 관리자(시스템): 매시(정각 단위)마다 자동으로 재고현황 조회·공유
+            if (self._auth or {}).get("role") == "admin":
+                hourkey = time.strftime("%Y-%m-%d %H", lt)
+                if getattr(self, "_last_autoshare", "") != hourkey:
+                    self._last_autoshare = hourkey
+                    self._auto_query_and_share()
         except Exception:   # noqa: BLE001
             pass
         try:
