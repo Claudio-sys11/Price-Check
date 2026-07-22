@@ -2077,7 +2077,7 @@ class App(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _auto_query_and_share(self) -> None:
-        """관리자: 정해진 시각(매시)마다 자동으로 재고현황을 조회·공유."""
+        """관리자: 지정 시각(00:01)에 자동으로 재고현황을 조회·공유(하루 1회)."""
         if (self._auth or {}).get("role") != "admin":
             return
         cfg = self._current_config()
@@ -4225,11 +4225,11 @@ class App(tk.Tk):
                     and getattr(self, "_last_finalized", "") != today):
                 self._last_finalized = today
                 self._finalize_prev_days(today)
-            # 관리자(시스템): 매시(정각 단위)마다 자동으로 재고현황 조회·공유
+            # 관리자(시스템): 지정 시각(00:01)에 자동으로 재고현황 조회·공유(하루 1회)
             if (self._auth or {}).get("role") == "admin":
-                hourkey = time.strftime("%Y-%m-%d %H", lt)
-                if getattr(self, "_last_autoshare", "") != hourkey:
-                    self._last_autoshare = hourkey
+                if (lt.tm_hour == 0 and lt.tm_min >= 1
+                        and getattr(self, "_last_autoshare", "") != today):
+                    self._last_autoshare = today
                     self._auto_query_and_share()
                 self._check_inventory_request()   # 사용자 갱신 요청 확인(승인 팝업)
         except Exception:   # noqa: BLE001
