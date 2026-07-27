@@ -37,6 +37,8 @@ FIXED_USER_ID = "THEFEELKOREA"     # 사용자ID(고정·수정 불가)
 DEFAULT_API_CERT_KEY = "1c71a3238e8dd47c7b157a30bddb6c1fe8"   # API 인증키(기본값·수정 가능)
 _OLD_API_CERT_KEYS = {"28ac7027d054c443cb50b538fc5063f058",
                       "2b4a6569451a84b93aa0548bd0ad0ef428"}    # 이전 기본 키(저장돼 있으면 새 키로 갱신)
+API_KEY_EXPIRY = "2027-07-20"   # 기본 인증키(1c71a…) 만료일 — 만료 전 재발급 안내용
+API_KEY_WARN_DAYS = 30          # 만료 N일 전부터 로그인 시 경고
 
 
 def resource_path(rel: str) -> str:
@@ -1975,6 +1977,31 @@ class App(tk.Tk):
         self._switch_tab("inv")
         self._draw_header()   # 헤더에 사용자/로그아웃 표시
         self._start_daily_scheduler()   # 자동 확정/자동 공유 점검 시작
+        self.after(1500, self._check_api_key_expiry)   # 인증키 만료 임박 안내
+
+    def _check_api_key_expiry(self) -> None:
+        """기본 인증키의 만료일이 임박(또는 지남)하면 로그인 후 1회 안내."""
+        from datetime import date, datetime
+        key = (self.var_key.get() or "").strip()
+        if key != DEFAULT_API_CERT_KEY:
+            return   # 사용자 지정 키는 만료일을 알 수 없어 안내 생략
+        try:
+            exp = datetime.strptime(API_KEY_EXPIRY, "%Y-%m-%d").date()
+        except ValueError:
+            return
+        days = (exp - date.today()).days
+        if days < 0:
+            pmsg.showwarning(
+                "EcountERP 인증키 만료",
+                f"EcountERP API 인증키가 만료되었습니다(만료일 {API_KEY_EXPIRY}).\n"
+                "재발급 후 [설정] → '인증 정보 설정'에서 새 키로 교체해 주세요.\n"
+                "만료 상태에서는 재고현황 조회가 되지 않습니다.")
+        elif days <= API_KEY_WARN_DAYS:
+            pmsg.showwarning(
+                "EcountERP 인증키 만료 임박",
+                f"EcountERP API 인증키가 {days}일 후 만료됩니다(만료일 {API_KEY_EXPIRY}).\n"
+                "만료 전에 EcountERP에서 재발급해 교체(또는 개발자에게 갱신 요청)해 주세요.\n"
+                "만료되면 조회·자동 일일현황이 중단됩니다.")
 
     def _apply_inventory_role(self, is_admin: bool) -> None:
         """관리자=직접 조회(시스템 역할), 일반 사용자=공유본만 보기(직접조회 차단)."""
