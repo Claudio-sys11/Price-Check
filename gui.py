@@ -34,8 +34,9 @@ DEFAULT_GITHUB_REPO = "Claudio-sys11/Price-Check"   # 자동 업데이트 기본
 # 인증 정보 고정값
 FIXED_COM_CODE = "188894"          # 회사코드(고정·수정 불가)
 FIXED_USER_ID = "THEFEELKOREA"     # 사용자ID(고정·수정 불가)
-DEFAULT_API_CERT_KEY = "2b4a6569451a84b93aa0548bd0ad0ef428"   # API 인증키(기본값·수정 가능)
-_OLD_API_CERT_KEYS = {"28ac7027d054c443cb50b538fc5063f058"}    # 이전 기본 키(저장돼 있으면 새 키로 갱신)
+DEFAULT_API_CERT_KEY = "1c71a3238e8dd47c7b157a30bddb6c1fe8"   # API 인증키(기본값·수정 가능)
+_OLD_API_CERT_KEYS = {"28ac7027d054c443cb50b538fc5063f058",
+                      "2b4a6569451a84b93aa0548bd0ad0ef428"}    # 이전 기본 키(저장돼 있으면 새 키로 갱신)
 
 
 def resource_path(rel: str) -> str:
@@ -2085,10 +2086,25 @@ class App(tk.Tk):
             return
         if get_today_api_calls() + EST_CALLS_PER_QUERY > DAILY_API_LIMIT:
             return   # 일일 한도 초과 시 자동 조회 생략
+        self._auto_daily = True   # 재고현황 후 Wizfasta까지 이어 일일현황 기록
         self._query_seq = getattr(self, "_query_seq", 0) + 1
         self.status.set("자동 조회·공유 중…")
         threading.Thread(target=self._do_query,
                          args=(cfg, self._query_seq), daemon=True).start()
+
+    def _auto_daily_after_inventory(self) -> None:
+        """자동(시스템) 조회: 재고현황 완료 후 Wizfasta 원가까지 이어 일일현황 기록."""
+        corp = self.var_wcorp.get().strip()
+        uid = self.var_wid.get().strip()
+        pw = self.var_wpw.get()
+        if not (corp and uid and pw):
+            # Wizfasta 로그인 정보가 없으면 원가비교 불가 → 일일현황 기록은 못 하고 재고 공유만 됨
+            self.status.set("자동 공유 완료(일일현황 기록엔 Wizfasta 로그인 정보 필요)")
+            return
+        if not getattr(self, "_inventory_display_all", []):
+            return
+        self._auto_system_record = True   # 이번 원가비교 기록을 '시스템'으로 표기
+        self._on_fetch_wizfasta()          # → _wiz_done → 원가비교 → _record_daily_status
 
     def _load_shared_inventory(self) -> None:
         """일반 사용자: 시스템이 공유한 재고현황을 내려받아 표시(EcountERP 접속 없음)."""
@@ -3782,6 +3798,10 @@ class App(tk.Tk):
         if ((self._auth or {}).get("role") == "admin"
                 and getattr(self, "_query_seq", 0) == my_seq):
             self.after(300, self._share_current_inventory)
+            # 자동(시스템) 조회면 이어서 Wizfasta 원가비교 → 일일현황 기록
+            if getattr(self, "_auto_daily", False):
+                self._auto_daily = False
+                self.after(1200, self._auto_daily_after_inventory)
 
     # ---- 입고단가 매칭 진행 표시(경과시간 매초 갱신 + %) -----------------
     def _start_match_progress(self, total: int) -> None:
@@ -4097,6 +4117,12 @@ class App(tk.Tk):
             "by_name": ((self._auth or {}).get("name")
                         or self._display_user((self._auth or {}).get("username", ""))),
         }
+        # 자동(시스템) 조회로 기록되는 경우: 조회자=시스템, 시각=00:01 로 표기
+        if getattr(self, "_auto_system_record", False):
+            rec["by"] = "system"
+            rec["by_name"] = "시스템"
+            rec["time"] = "00:01"
+            self._auto_system_record = False
         # 로컬 백업 저장(오프라인 대비) — 같은 날의 여러 조회를 누적(date+time)
         hist = [h for h in load_daily_status()
                 if not (h.get("date") == rec["date"] and h.get("time") == rec["time"])]
